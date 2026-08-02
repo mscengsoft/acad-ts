@@ -1,6 +1,9 @@
 import { DxfStreamWriterBase } from './DxfStreamWriterBase.js';
 import { GroupCodeValue, GroupCodeValueType } from '../../../GroupCodeValue.js';
 
+const HEX_BYTES: string[] = Array.from({ length: 256 }, (_, i) =>
+  i.toString(16).toUpperCase().padStart(2, '0'));
+
 export class DxfAsciiWriter extends DxfStreamWriterBase {
   private _writer: { write(s: string): void; flush?(): void; close?(): void };
   private _lines: string[] = [];
@@ -81,7 +84,7 @@ export class DxfAsciiWriter extends DxfStreamWriterBase {
         const chunk = value as Uint8Array;
         let hex = '';
         for (let i = 0; i < chunk.length; i++) {
-          hex += chunk[i].toString(16).toUpperCase().padStart(2, '0');
+          hex += HEX_BYTES[chunk[i]];
         }
         line = hex;
         break;
@@ -98,13 +101,20 @@ export class DxfAsciiWriter extends DxfStreamWriterBase {
     if (typeof value !== 'number' || isNaN(value)) {
       return '0.0';
     }
+    if (Number.isInteger(value) && Math.abs(value) < 1e15) {
+      return Object.is(value, -0) ? '-0.0' : `${value}.0`;
+    }
     let s = value.toFixed(16);
     // Remove trailing zeros but keep at least one decimal place
     if (s.includes('.')) {
-      s = s.replace(/0+$/, '');
-      if (s.endsWith('.')) {
-        s += '0';
+      let end = s.length;
+      while (s.charCodeAt(end - 1) === 0x30 /* '0' */) {
+        end--;
       }
+      if (s.charCodeAt(end - 1) === 0x2E /* '.' */) {
+        end++;
+      }
+      s = s.substring(0, end);
     }
     return s;
   }

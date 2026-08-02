@@ -87,6 +87,9 @@ export class DwgWriter extends CadWriterBase<DwgWriterConfiguration> {
 	}
 
 	private _getFileHeaderWriter(): void {
+		// A Uint8Array must be used directly: wrapping it in new Uint8Array() would
+		// copy it, so the caller's buffer would never receive the written file.
+		const streamView = this._stream instanceof Uint8Array ? this._stream : new Uint8Array(this._stream);
 		switch (this._document.header.version) {
 			case ACadVersion.MC0_0:
 			case ACadVersion.AC1_2:
@@ -102,19 +105,19 @@ export class DwgWriter extends CadWriterBase<DwgWriterConfiguration> {
 				throw new CadNotSupportedException(this._document.header.version);
 			case ACadVersion.AC1014:
 			case ACadVersion.AC1015:
-				this._fileHeaderWriter = new DwgFileHeaderWriterAC15(new Uint8Array(this._stream), this._encoding, this._document);
+				this._fileHeaderWriter = new DwgFileHeaderWriterAC15(streamView, this._encoding, this._document);
 				break;
 			case ACadVersion.AC1018:
-				this._fileHeaderWriter = new DwgFileHeaderWriterAC18(new Uint8Array(this._stream), this._encoding, this._document);
+				this._fileHeaderWriter = new DwgFileHeaderWriterAC18(streamView, this._encoding, this._document);
 				break;
 			case ACadVersion.AC1021:
 				// AC1021 writer currently uses AC18-compatible section/page layout.
-				this._fileHeaderWriter = new DwgFileHeaderWriterAC18(new Uint8Array(this._stream), this._encoding, this._document);
+				this._fileHeaderWriter = new DwgFileHeaderWriterAC18(streamView, this._encoding, this._document);
 				break;
 			case ACadVersion.AC1024:
 			case ACadVersion.AC1027:
 			case ACadVersion.AC1032:
-				this._fileHeaderWriter = new DwgFileHeaderWriterAC18(new Uint8Array(this._stream), this._encoding, this._document);
+				this._fileHeaderWriter = new DwgFileHeaderWriterAC18(streamView, this._encoding, this._document);
 				break;
 			default:
 				throw new CadNotSupportedException();
@@ -127,7 +130,7 @@ export class DwgWriter extends CadWriterBase<DwgWriterConfiguration> {
 		writer.onNotification = (sender, e) => this.triggerNotification(sender, e);
 		writer.write();
 
-		const data = new Uint8Array(writer.startWriterStream).slice(0, writer.bytesWritten);
+		const data = new Uint8Array(writer.startWriterStream).subarray(0, writer.bytesWritten);
 		this._fileHeaderWriter.addSection(DwgSectionDefinition.header, data, true);
 	}
 
@@ -136,7 +139,7 @@ export class DwgWriter extends CadWriterBase<DwgWriterConfiguration> {
 		const writer = new DwgClassesWriter(stream, this._document, this._encoding);
 		writer.write();
 
-		const data = new Uint8Array(writer.startWriterStream).slice(0, writer.bytesWritten);
+		const data = new Uint8Array(writer.startWriterStream).subarray(0, writer.bytesWritten);
 		this._fileHeaderWriter.addSection(DwgSectionDefinition.classes, data, true);
 	}
 
@@ -147,7 +150,7 @@ export class DwgWriter extends CadWriterBase<DwgWriterConfiguration> {
 			const stream = new Uint8Array(8192);
 			const writer = new DwgSummaryInfoWriter(this._version, stream, this._encoding);
 			writer.write(this._document.summaryInfo);
-			const data = new Uint8Array(writer.writerStream).slice(0, writer.bytesWritten);
+			const data = new Uint8Array(writer.writerStream).subarray(0, writer.bytesWritten);
 			this._fileHeaderWriter.addSection(DwgSectionDefinition.summaryInfo, data, false, 0x100);
 		} else {
 			this._fileHeaderWriter.addSection(DwgSectionDefinition.summaryInfo, new Uint8Array(0), false, 0x100);
@@ -163,7 +166,7 @@ export class DwgWriter extends CadWriterBase<DwgWriterConfiguration> {
 		} else {
 			writer.write();
 		}
-		const data = new Uint8Array(writer.writerStream).slice(0, writer.bytesWritten);
+		const data = new Uint8Array(writer.writerStream).subarray(0, writer.bytesWritten);
 		this._fileHeaderWriter.addSection(DwgSectionDefinition.preview, data, false, 0x400);
 	}
 
@@ -174,7 +177,7 @@ export class DwgWriter extends CadWriterBase<DwgWriterConfiguration> {
 		const writer = new DwgAppInfoWriter(this._version, stream);
 		writer.write();
 
-		const data = new Uint8Array(writer.writerStream).slice(0, writer.bytesWritten);
+		const data = new Uint8Array(writer.writerStream).subarray(0, writer.bytesWritten);
 		this._fileHeaderWriter.addSection(DwgSectionDefinition.appInfo, data, false, 0x80);
 	}
 
@@ -277,7 +280,7 @@ export class DwgWriter extends CadWriterBase<DwgWriterConfiguration> {
 		const writer = new DwgAuxHeaderWriter(stream, this._encoding, this._document.header);
 		writer.write();
 
-		const data = new Uint8Array(writer.writerStream).slice(0, writer.bytesWritten);
+		const data = new Uint8Array(writer.writerStream).subarray(0, writer.bytesWritten);
 		this._fileHeaderWriter.addSection(DwgSectionDefinition.auxHeader, data, true);
 	}
 }

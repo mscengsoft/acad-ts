@@ -12,15 +12,36 @@ import { ICadObjectTemplate } from './ICadObjectTemplate.js';
 export abstract class CadTemplate<T extends CadObject = CadObject> implements ICadObjectTemplate {
 	cadObject: CadObject;
 
-	eDataTemplate: Map<number, ExtendedDataRecord[]> = new Map();
+	// Lazily created: most objects carry no XData or reactors, and one of
+	// each collection per template is measurable GC pressure on large files.
+	private _eDataTemplate: Map<number, ExtendedDataRecord[]> | null = null;
+	private _eDataTemplateByAppName: Map<string, ExtendedDataRecord[]> | null = null;
+	private _reactorsHandles: Set<number> | null = null;
 
-	eDataTemplateByAppName: Map<string, ExtendedDataRecord[]> = new Map();
+	get eDataTemplate(): Map<number, ExtendedDataRecord[]> {
+		return this._eDataTemplate ??= new Map();
+	}
+	set eDataTemplate(value: Map<number, ExtendedDataRecord[]>) {
+		this._eDataTemplate = value;
+	}
+
+	get eDataTemplateByAppName(): Map<string, ExtendedDataRecord[]> {
+		return this._eDataTemplateByAppName ??= new Map();
+	}
+	set eDataTemplateByAppName(value: Map<string, ExtendedDataRecord[]>) {
+		this._eDataTemplateByAppName = value;
+	}
+
+	get reactorsHandles(): Set<number> {
+		return this._reactorsHandles ??= new Set();
+	}
+	set reactorsHandles(value: Set<number>) {
+		this._reactorsHandles = value;
+	}
 
 	hasBeenBuilt: boolean = false;
 
 	ownerHandle: number | null = null;
-
-	reactorsHandles: Set<number> = new Set();
 
 	xDictHandle: number | null = null;
 
@@ -48,30 +69,36 @@ export abstract class CadTemplate<T extends CadObject = CadObject> implements IC
 			this.cadObject.xDictionary = cadDictionary;
 		}
 
-		for (const handle of this.reactorsHandles) {
-			const reactor = builder.tryGetCadObject<CadObject>(handle);
-			if (reactor) {
-				this.cadObject.addReactor(reactor);
-			} else {
-				builder.notify(`Reactor with handle ${handle} not found`, NotificationType.Warning);
+		if (this._reactorsHandles) {
+			for (const handle of this._reactorsHandles) {
+				const reactor = builder.tryGetCadObject<CadObject>(handle);
+				if (reactor) {
+					this.cadObject.addReactor(reactor);
+				} else {
+					builder.notify(`Reactor with handle ${handle} not found`, NotificationType.Warning);
+				}
 			}
 		}
 
-		for (const [key, value] of this.eDataTemplate) {
-			const app = builder.tryGetCadObject<AppId>(key);
-			if (app) {
-				this.cadObject.extendedData.set(app, new ExtendedData(value));
-			} else {
-				builder.notify(`AppId in extended data with handle ${key} not found`, NotificationType.Warning);
+		if (this._eDataTemplate) {
+			for (const [key, value] of this._eDataTemplate) {
+				const app = builder.tryGetCadObject<AppId>(key);
+				if (app) {
+					this.cadObject.extendedData.set(app, new ExtendedData(value));
+				} else {
+					builder.notify(`AppId in extended data with handle ${key} not found`, NotificationType.Warning);
+				}
 			}
 		}
 
-		for (const [key, value] of this.eDataTemplateByAppName) {
-			const app = builder.tryGetTableEntry<AppId>(key);
-			if (app) {
-				this.cadObject.extendedData.set(app, new ExtendedData(value));
-			} else {
-				builder.notify(`AppId in extended data with handle ${key} not found`, NotificationType.Warning);
+		if (this._eDataTemplateByAppName) {
+			for (const [key, value] of this._eDataTemplateByAppName) {
+				const app = builder.tryGetTableEntry<AppId>(key);
+				if (app) {
+					this.cadObject.extendedData.set(app, new ExtendedData(value));
+				} else {
+					builder.notify(`AppId in extended data with handle ${key} not found`, NotificationType.Warning);
+				}
 			}
 		}
 	}

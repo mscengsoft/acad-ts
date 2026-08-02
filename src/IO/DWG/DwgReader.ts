@@ -5,6 +5,7 @@ import { CadUtils } from '../../CadUtils.js';
 import { DwgPreview } from '../../DwgPreview.js';
 import { DxfClassCollection } from '../../Classes/DxfClassCollection.js';
 import { CadNotSupportedException } from '../../Exceptions/CadNotSupportedException.js';
+import { DwgException } from '../../Exceptions/DwgException.js';
 import { CadHeader } from '../../Header/CadHeader.js';
 import { CadReaderBase } from '../CadReaderBase.js';
 import { HugeMemoryStream } from '../HugeMemoryStream.js';
@@ -39,6 +40,7 @@ import { DwgLZ77AC21Decompressor } from './DwgStreamReaders/DwgLZ77AC21Decompres
 export class DwgReader extends CadReaderBase<DwgReaderConfiguration> {
 	private _builder!: DwgDocumentBuilder;
 	private _fileHeader!: DwgFileHeader;
+	private _rsScratch: Uint8Array<ArrayBuffer> = new Uint8Array(0);
 
 	constructor(stream: ArrayBuffer, notification: NotificationEventHandler | null = null) {
 		super(stream, notification);
@@ -66,7 +68,7 @@ export class DwgReader extends CadReaderBase<DwgReaderConfiguration> {
 		this._fileHeader = this.readFileHeader();
 
 		this._builder = new DwgDocumentBuilder(this._fileHeader.acadVersion, this._document, this.configuration);
-		this._builder.onNotification = (sender, e) => this.onNotificationEvent(sender, e);
+		this._builder.onNotification = this.onNotification ? (sender, e) => this.onNotificationEvent(sender, e) : null;
 
 		this._document.summaryInfo = this.readSummaryInfo();
 		this._document.header = this.readHeader();
@@ -221,7 +223,11 @@ export class DwgReader extends CadReaderBase<DwgReaderConfiguration> {
 
 	private _readObjects(): void {
 		const handles = this._readHandles();
-		this._document.classes = this._readClasses();
+		// read() already parsed the classes section; avoid decoding and
+		// parsing it a second time when called through the standard path.
+		if (!this._document.classes || this._document.classes.count === 0) {
+			this._document.classes = this._readClasses();
+		}
 
 		let sreader: IDwgStreamReader;
 		if (this._fileHeader.acadVersion <= ACadVersion.AC1015) {
@@ -467,7 +473,11 @@ export class DwgReader extends CadReaderBase<DwgReaderConfiguration> {
 		const pmChecksum = sreader.readRawLong();
 
 		// Get the decompressed stream to read the records
-		const decompressed = DwgLZ77AC18Decompressor.decompress(sreader.stream, sreader.position, pmDecompressedSize);
+		const decompressed = DwgLZ77AC18Decompressor.decompress(
+			sreader.stream,
+			sreader.position,
+			this._validateSectionSize(pmDecompressedSize, 'page map'),
+		);
 
 		// Section size
 		let total = 0x100;
@@ -505,7 +515,11 @@ export class DwgReader extends CadReaderBase<DwgReaderConfiguration> {
 		const smCompressionType = sreader.readRawLong();
 		const smChecksum = sreader.readRawLong();
 
-		const decompressedStream = DwgLZ77AC18Decompressor.decompress(sreader.stream, sreader.position, smDecompressedSize);
+		const decompressedStream = DwgLZ77AC18Decompressor.decompress(
+			sreader.stream,
+			sreader.position,
+			this._validateSectionSize(smDecompressedSize, 'section map'),
+		);
 		let dsPos = 0;
 		const dsView = new DataView(decompressedStream.buffer, decompressedStream.byteOffset, decompressedStream.byteLength);
 
@@ -753,9 +767,9 @@ export class DwgReader extends CadReaderBase<DwgReaderConfiguration> {
 				// 8  Page Id (64-bit)
 				page.pageNumber = readSmLong();
 				// 8  Page Uncompressed Size (64-bit)
-				page.decompressedSize = readSmULong();
+				page.decompressedSize = this._validateSectionSize(readSmULong(), `${section.name} section page (uncompressed size)`);
 				// 8  Page Compressed Size (64-bit)
-				page.compressedSize = readSmULong();
+				page.compressedSize = this._validateSectionSize(readSmULong(), `${section.name} section page (compressed size)`);
 				// 8  Page Checksum (64-bit)
 				page.checksum = readSmULong();
 				// 8  Page CRC (64-bit)
@@ -791,34 +805,49 @@ export class DwgReader extends CadReaderBase<DwgReaderConfiguration> {
 		const descriptor = fileheader.descriptors.get(sectionName);
 		if (!descriptor) return null;
 
-		const totalSize = descriptor.decompressedSize * descriptor.localSections.length;
+		const totalSize = this._validateSectionSize(
+			descriptor.decompressedSize * descriptor.localSections.length,
+			`${sectionName} section`,
+		);
 		const memoryStream = new Uint8Array(totalSize);
 		let msPos = 0;
 
 		const fileBytes = new Uint8Array(this._fileStream);
+		// The position setter resets bitShift, so one reader re-positioned per
+		// page is equivalent to constructing a fresh reader for each page.
+		const secreader = DwgStreamReaderBase.getStreamHandler(fileheader.acadVersion, fileBytes);
 
 		for (const section of descriptor.localSections) {
+			this._validateSectionSize(section.decompressedSize, `${sectionName} section page`);
 			if (section.isEmpty) {
 				// Fill with zeros
-				for (let i = 0; i < section.decompressedSize; ++i) {
-					memoryStream[msPos++] = 0;
-				}
+				memoryStream.fill(0, msPos, msPos + section.decompressedSize);
+				msPos += section.decompressedSize;
 			} else {
-				const secreader = DwgStreamReaderBase.getStreamHandler(fileheader.acadVersion, fileBytes);
 				secreader.position = section.seeker;
 
 				// Decrypt the data section header
 				this._decryptDataSection(section, secreader);
 
 				if (descriptor.isCompressed) {
-					// Decompress to memory stream
-					const decompressed = DwgLZ77AC18Decompressor.decompress(
-						secreader.stream, secreader.position, section.decompressedSize);
-					memoryStream.set(decompressed.subarray(0, section.decompressedSize), msPos);
+					// Decompress to memory stream. In failsafe mode a damaged page
+					// degrades to a zero-filled page instead of aborting the read.
+					try {
+						const decompressed = DwgLZ77AC18Decompressor.decompress(
+							secreader.stream, secreader.position, section.decompressedSize);
+						memoryStream.set(decompressed.subarray(0, section.decompressedSize), msPos);
+					} catch (ex) {
+						if (!this.configuration.failsafe || !(ex instanceof RangeError)) {
+							throw ex;
+						}
+						this.triggerNotification(`Failed to decompress ${sectionName} section page at ${section.seeker}: ${ex.message}`, NotificationType.Error);
+						memoryStream.fill(0, msPos, msPos + section.decompressedSize);
+					}
 					msPos += section.decompressedSize;
 				} else {
-					// Read directly
-					const buf = secreader.readBytes(section.compressedSize);
+					// Read directly; the bytes are copied into memoryStream right
+					// away, so a short-lived view avoids an intermediate copy.
+					const buf = secreader.readBytesView(section.compressedSize);
 					memoryStream.set(buf, msPos);
 					msPos += section.compressedSize;
 				}
@@ -857,7 +886,11 @@ export class DwgReader extends CadReaderBase<DwgReaderConfiguration> {
 		// Get total length of all uncompressed pages
 		let totalLength = 0;
 		for (const page of section.localSections) {
-			totalLength += page.decompressedSize;
+			this._validateSectionSize(page.decompressedSize, `${sectionName} section page`);
+			totalLength = this._validateSectionSize(
+				totalLength + page.decompressedSize,
+				`${sectionName} section`,
+			);
 		}
 
 		const memoryStream = new Uint8Array(totalLength);
@@ -867,32 +900,61 @@ export class DwgReader extends CadReaderBase<DwgReaderConfiguration> {
 
 		for (const page of section.localSections) {
 			if (page.isEmpty) {
-				for (let i = 0; i < page.decompressedSize; ++i) {
-					memoryStream[msPos++] = 0;
-				}
+				// memoryStream is freshly zero-initialized, so just advance the cursor
+				msPos += page.decompressedSize;
 			} else {
 				const pageData = fileheader.records.get(page.pageNumber);
 				if (!pageData) continue;
 
 				// Set pointer to current page (add 0x480 offset)
 				const startPos = pageData.seeker + 0x480;
-				let pageBytes = fileBytes.slice(startPos, startPos + pageData.size);
+				let pageBytes = fileBytes.subarray(startPos, startPos + pageData.size);
 
 				if (section.encoding === 4) {
-					// Reed-Solomon encoded
-					let v = page.compressedSize + 7;
-					v = v & 0xFFFFFFF8;
-					const alignedPageSize = Math.floor((v + 251 - 1) / 251);
-					const arr = new Uint8Array(alignedPageSize * 251);
+					// Reed-Solomon encoded. Use safe (non-int32) arithmetic and
+					// validate the resulting buffer size — compressedSize comes from
+					// the file and must not drive an unbounded allocation.
+					const v = Math.floor((page.compressedSize + 7) / 8) * 8;
+					const alignedPageSize = Math.ceil(v / 251);
+					const rsSize = this._validateSectionSize(
+						alignedPageSize * 251,
+						`${sectionName} section page (reed-solomon)`,
+					);
+					// Reuse one scratch buffer across pages; RS decode overwrites
+					// the first rsSize bytes it reads and the tail is never read.
+					if (this._rsScratch.length < rsSize) {
+						this._rsScratch = new Uint8Array(rsSize + (rsSize >>> 1));
+					}
+					const arr = this._rsScratch.subarray(0, rsSize);
 					this._reedSolomonDecoding(pageBytes, arr, alignedPageSize, 251);
 					pageBytes = arr;
 				}
 
 				if (page.compressedSize !== page.decompressedSize) {
-					// Compressed
-					const arr = new Uint8Array(page.decompressedSize);
-					DwgLZ77AC21Decompressor.decompress(pageBytes, 0, page.compressedSize, arr);
-					pageBytes = arr;
+					// Compressed: decompress straight into the section buffer,
+					// no intermediate page allocation.
+					const decompressedSize = this._validateSectionSize(
+						page.decompressedSize,
+						`${sectionName} section page`,
+					);
+					const target = memoryStream.subarray(msPos, msPos + decompressedSize);
+					try {
+						DwgLZ77AC21Decompressor.decompress(pageBytes, 0, page.compressedSize, target);
+					} catch (ex) {
+						// A damaged page should not abort the whole document in
+						// failsafe mode: leave the page zero-filled and keep the
+						// cursor aligned for the following pages. Hard limits
+						// (DwgException) still propagate.
+						if (!this.configuration.failsafe || !(ex instanceof RangeError)) {
+							throw ex;
+						}
+						this.triggerNotification(`Failed to decompress ${sectionName} section page ${page.pageNumber}: ${ex.message}`, NotificationType.Error);
+						target.fill(0);
+						msPos += page.decompressedSize;
+						continue;
+					}
+					msPos += page.decompressedSize;
+					continue;
 				}
 
 				memoryStream.set(pageBytes.subarray(0, page.decompressedSize), msPos);
@@ -906,27 +968,49 @@ export class DwgReader extends CadReaderBase<DwgReaderConfiguration> {
 	// #endregion
 
 	private _getPageBuffer(pageOffset: number, compressedSize: number, uncompressedSize: number, correctionFactor: number, blockSize: number, stream: Uint8Array): Uint8Array {
-		// Avoid shifted bits
-		let v = compressedSize + 7;
-		v = v & 0xFFFFFFF8;
+		// Round up to an 8-byte boundary without coercing to int32 — a huge
+		// compressedSize must reach _validateSectionSize as-is, not masked.
+		const v = Math.floor((compressedSize + 7) / 8) * 8;
 
-		const totalSize = v * correctionFactor;
+		const totalSize = this._validateSectionSize(v * correctionFactor, 'encoded data page');
 		const factor = Math.floor((totalSize + blockSize - 1) / blockSize);
-		const length = factor * 255;
-
-		const buffer = new Uint8Array(length);
+		const length = this._validateSectionSize(factor * 255, 'encoded data page buffer');
 
 		// Relative to data page map 1, add 0x480 to get stream position
 		const readPos = 0x480 + pageOffset;
-		buffer.set(stream.subarray(readPos, readPos + length));
+		let encoded: Uint8Array;
+		if (readPos >= 0 && readPos + length <= stream.length) {
+			// Common case: decode straight from a view of the file, no intermediate copy
+			encoded = stream.subarray(readPos, readPos + length);
+		} else {
+			// Truncated/out-of-range page: keep the original zero-padded copy semantics
+			encoded = new Uint8Array(length);
+			encoded.set(stream.subarray(readPos, readPos + length));
+		}
 
 		const compressedData = new Uint8Array(totalSize);
-		this._reedSolomonDecoding(buffer, compressedData, factor, blockSize);
+		this._reedSolomonDecoding(encoded, compressedData, factor, blockSize);
 
-		const decompressedData = new Uint8Array(uncompressedSize);
+		const decompressedData = new Uint8Array(this._validateSectionSize(uncompressedSize, 'data page'));
 		DwgLZ77AC21Decompressor.decompress(compressedData, 0, compressedSize, decompressedData);
 
 		return decompressedData;
+	}
+
+	private _validateSectionSize(size: number, sectionName: string): number {
+		const maximum = this.configuration.maxDecompressedSectionSize;
+		if (!Number.isSafeInteger(size) || size < 0) {
+			throw new DwgException(`Invalid decompressed size ${size} for ${sectionName}.`);
+		}
+		if (!Number.isSafeInteger(maximum) || maximum <= 0) {
+			throw new DwgException(`Invalid maxDecompressedSectionSize configuration: ${maximum}.`);
+		}
+		if (size > maximum) {
+			throw new DwgException(
+				`Decompressed size ${size} for ${sectionName} exceeds the configured limit ${maximum}.`,
+			);
+		}
+		return size;
 	}
 
 	private _readInt64(view: DataView, offset: number): number {
@@ -942,22 +1026,40 @@ export class DwgReader extends CadReaderBase<DwgReaderConfiguration> {
 	}
 
 	private _reedSolomonDecoding(encoded: Uint8Array, buffer: Uint8Array, factor: number, blockSize: number): void {
+		if (factor === 1) {
+			// Single interleave block: the de-interleave is a plain contiguous copy.
+			// subarray clamps to encoded.length; the pre-zeroed tail matches the old
+			// undefined-coerces-to-0 writes byte for byte.
+			const size = Math.min(buffer.length, blockSize);
+			buffer.set(encoded.subarray(0, size));
+			return;
+		}
 		let index = 0;
-		let n = 0;
 		let length = buffer.length;
-		for (let i = 0; i < factor; ++i) {
-			let cindex = n;
-			if (n < encoded.length) {
-				const size = Math.min(length, blockSize);
-				length -= size;
-				const offset = index + size;
-				while (index < offset) {
-					buffer[index] = encoded[cindex];
-					++index;
-					cindex += factor;
-				}
+		const factor2 = factor + factor;
+		const factor3 = factor2 + factor;
+		const factor4 = factor3 + factor;
+		const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+		for (let i = 0; i < factor && i < encoded.length; ++i) {
+			let cindex = i;
+			const size = Math.min(length, blockSize);
+			length -= size;
+			const offset = index + size;
+			const offsetUnrolled = offset - 3;
+			while (index < offsetUnrolled) {
+				view.setUint32(index,
+					encoded[cindex]
+					| (encoded[cindex + factor] << 8)
+					| (encoded[cindex + factor2] << 16)
+					| (encoded[cindex + factor3] << 24), true);
+				index += 4;
+				cindex += factor4;
 			}
-			++n;
+			while (index < offset) {
+				buffer[index] = encoded[cindex];
+				++index;
+				cindex += factor;
+			}
 		}
 	}
 }

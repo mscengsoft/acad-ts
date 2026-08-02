@@ -40,11 +40,14 @@ export abstract class DxfStreamWriterBase implements IDxfStreamWriter {
     this.writeDxfCode(intCode);
 
     if (typeof value === 'string') {
-      let s = value
-        .replace(/\^/g, '^ ')
-        .replace(/\n/g, '^J')
-        .replace(/\r/g, '^M')
-        .replace(/\t/g, '^I');
+      let s = value;
+      if (/[\^\n\r\t]/.test(s)) {
+        s = s
+          .replace(/\^/g, '^ ')
+          .replace(/\n/g, '^J')
+          .replace(/\r/g, '^M')
+          .replace(/\t/g, '^I');
+      }
       this.writeValue(intCode, s);
     } else {
       this.writeValue(intCode, value);
@@ -54,7 +57,11 @@ export abstract class DxfStreamWriterBase implements IDxfStreamWriter {
   public writeVector(code: DxfCode | number, value: IVector, map?: DxfClassMap | null): void {
     const intCode = typeof code === 'number' ? code : code as number;
     for (let i = 0; i < value.dimension; i++) {
-      this.write(intCode + i * 10, value[i], map);
+      const coordinate = (value as unknown as Record<number, unknown>)[i];
+      if (typeof coordinate !== 'number') {
+        throw new Error(`Invalid vector dimension ${value.dimension}.`);
+      }
+      this.write(intCode + i * 10, coordinate, map);
     }
   }
 

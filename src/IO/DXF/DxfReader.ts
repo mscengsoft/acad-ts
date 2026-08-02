@@ -88,7 +88,7 @@ export class DxfReader extends CadReaderBase<DxfReaderConfiguration> {
     this._reader = this._reader ?? this._getReader();
 
     this._builder = new DxfDocumentBuilder(this._version, this._document, this.configuration);
-    this._builder.onNotification = this.onNotificationEvent.bind(this);
+    this._builder.onNotification = this.onNotification ? this.onNotificationEvent.bind(this) : null;
 
     while (this._reader.valueAsString !== DxfFileToken.endOfFile) {
       if (this._reader.valueAsString !== DxfFileToken.beginSection) {
@@ -141,7 +141,10 @@ export class DxfReader extends CadReaderBase<DxfReaderConfiguration> {
 
     const header = new CadHeader();
 
-    const headerMap: Map<string, CadSystemVariable> = CadHeader.getHeaderMap();
+    // getHeaderMap() copies the ~500-entry system variable map on every call;
+    // readHeader only reads from it, so build the copy once per process.
+    const holder = DxfReader as unknown as { _headerMapCache?: Map<string, CadSystemVariable> };
+    const headerMap: Map<string, CadSystemVariable> = (holder._headerMapCache ??= CadHeader.getHeaderMap());
 
     this._reader.readNext();
 
@@ -214,7 +217,7 @@ export class DxfReader extends CadReaderBase<DxfReaderConfiguration> {
     this._reader = this._reader ?? this._getReader();
 
     this._builder = new DxfDocumentBuilder(this._version, this._document, this.configuration);
-    this._builder.onNotification = this.onNotificationEvent.bind(this);
+    this._builder.onNotification = this.onNotification ? this.onNotificationEvent.bind(this) : null;
 
     this._readTablesSection();
 
@@ -235,7 +238,7 @@ export class DxfReader extends CadReaderBase<DxfReaderConfiguration> {
     this._reader = this._reader ?? this._getReader();
 
     this._builder = new DxfDocumentBuilder(this._version, this._document, this.configuration);
-    this._builder.onNotification = this.onNotificationEvent.bind(this);
+    this._builder.onNotification = this.onNotification ? this.onNotificationEvent.bind(this) : null;
 
     this._readEntitiesSection();
 

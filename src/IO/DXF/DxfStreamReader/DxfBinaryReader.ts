@@ -17,6 +17,23 @@ export class DxfBinaryReader extends DxfStreamReaderBase {
   protected _data: Uint8Array;
   protected _view: DataView;
   protected _pos: number = 0;
+	private _chunkStart: number = 0;
+	private _chunkEnd: number = 0;
+	private _deferredIsChunk: boolean = false;
+	private _strStart: number = 0;
+	private _strEnd: number = 0;
+	private _rawDecoded: string | null = '';
+
+	public override get valueRaw(): string {
+		if (this._rawDecoded === null) {
+			this._rawDecoded = this.decodeStringRange(this._data, this._strStart, this._strEnd);
+		}
+		return this._rawDecoded;
+	}
+
+	public override set valueRaw(value: string) {
+		this._rawDecoded = value;
+	}
 
   public constructor(stream: Uint8Array) {
     super();
@@ -35,16 +52,29 @@ export class DxfBinaryReader extends DxfStreamReaderBase {
   }
 
   protected readStringLine(): string {
-    const bytes: number[] = [];
-    while (this._pos < this._data.length) {
-      const b = this._data[this._pos++];
-      if (b === 0) break;
-      bytes.push(b);
+    const start = this._pos;
+    const data = this._data;
+    const dataLength = data.length;
+    // Manual scan beats the native indexOf call cost for short strings.
+    let end = start;
+    while (end < dataLength && data[end] !== 0) {
+      end++;
     }
+    this._pos = end;
 
-    this.valueRaw = this.decodeString(new Uint8Array(bytes));
+    // Decoding is deferred: tokens whose value is never read skip the
+    // subarray + decode entirely.
+    this._strStart = start;
+    this._strEnd = end;
+    this._rawDecoded = null;
+    this._deferredIsChunk = false;
+    this.deferCurrentValue();
+
+    if (this._pos < this._data.length) {
+      this._pos++;
+    }
     this.position = this._pos;
-    return this.valueRaw;
+    return undefined as unknown as string;
   }
 
   protected readCode(): DxfCode {
@@ -91,19 +121,57 @@ export class DxfBinaryReader extends DxfStreamReaderBase {
   }
 
   protected lineAsHandle(): number {
-    const str = this.readStringLine();
-    const result = parseInt(str, 16);
-    if (!isNaN(result)) {
-      return result;
+    const data = this._data;
+    const dataLength = data.length;
+    const start = this._pos;
+    let end = start;
+    while (end < dataLength && data[end] !== 0) {
+      end++;
     }
-    return 0;
+
+    const length = end - start;
+    if (length > 0 && length <= 13) {
+      let value = 0;
+      let i = start;
+      for (; i < end; i++) {
+        const c = data[i];
+        if (c >= 48 && c <= 57) value = value * 16 + (c - 48);
+        else if (c >= 65 && c <= 70) value = value * 16 + (c - 55);
+        else if (c >= 97 && c <= 102) value = value * 16 + (c - 87);
+        else break;
+      }
+      if (i === end) {
+        this._pos = end < data.length ? end + 1 : end;
+        this.position = this._pos;
+        return value;
+      }
+    }
+
+    this.readStringLine();
+    const result = parseInt(this.valueRaw, 16);
+    const handle = isNaN(result) ? 0 : result;
+    // readStringLine deferred the value; the token's value is this number.
+    this.value = handle;
+    return handle;
   }
 
   protected lineAsBinaryChunk(): Uint8Array {
     const length = this._data[this._pos++];
-    const chunk = this._data.slice(this._pos, this._pos + length);
+		this._chunkStart = this._pos;
     this._pos += length;
+		this._chunkEnd = this._pos;
     this.position = this._pos;
-    return chunk;
+		this._deferredIsChunk = true;
+		this.deferCurrentValue();
+		return undefined as unknown as Uint8Array;
+	}
+
+	protected override materializeDeferredValue(): Uint8Array | string {
+		if (!this._deferredIsChunk) {
+			return this.valueRaw;
+		}
+		const chunk = this.allocChunk(this._chunkEnd - this._chunkStart);
+		chunk.set(this._data.subarray(this._chunkStart, this._chunkEnd));
+		return chunk;
   }
 }

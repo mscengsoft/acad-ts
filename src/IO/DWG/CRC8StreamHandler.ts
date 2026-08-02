@@ -1,5 +1,17 @@
 import { CRC } from './CRC.js';
 
+// Slicing-by-2 companion table: T1[i] applies the CRC table twice, letting the
+// hot loops fold two input bytes per iteration. Valid because CRC tables are
+// linear over GF(2): T[a ^ b] = T[a] ^ T[b].
+const crcTable2: Uint16Array = (() => {
+	const t0 = CRC.crcTable;
+	const t1 = new Uint16Array(256);
+	for (let i = 0; i < 256; i++) {
+		t1[i] = ((t0[i] >>> 8) ^ t0[t0[i] & 0xFF]) & 0xFFFF;
+	}
+	return t1;
+})();
+
 export class CRC8StreamHandler {
 	private _data: Uint8Array;
 	private _position: number = 0;
@@ -29,25 +41,47 @@ export class CRC8StreamHandler {
 
 	write(buffer: Uint8Array, offset: number, count: number): void {
 		const length = offset + count;
+		const data = this._data;
+		const table = CRC.crcTable;
+		const table2 = crcTable2;
+		let seed = this.seed;
+		let position = this._position;
 
-		for (let index = offset; index < length; ++index) {
-			this.seed = CRC8StreamHandler._decode(this.seed, buffer[index]);
+		const pairEnd = offset + (count & ~1);
+		for (let index = offset; index < pairEnd; index += 2) {
+			const value0 = buffer[index];
+			const value1 = buffer[index + 1];
+			const x = seed ^ value0 ^ (value1 << 8);
+			seed = (table2[x & 0xFF] ^ table[(x >>> 8) & 0xFF]) & 0xFFFF;
+			data[position++] = value0;
+			data[position++] = value1;
+		}
+		if ((count & 1) !== 0) {
+			const value = buffer[length - 1];
+			seed = ((seed >>> 8) ^ table[(value ^ seed) & 0xFF]) & 0xFFFF;
+			data[position++] = value;
 		}
 
-		for (let i = 0; i < count; i++) {
-			this._data[this._position + i] = buffer[offset + i];
-		}
-		this._position += count;
+		this.seed = seed;
+		this._position = position;
 	}
 
 	static getCRCValue(seed: number, buffer: Uint8Array, startPos: number, endPos: number): number {
+		const table = CRC.crcTable;
+		const table2 = crcTable2;
 		let currValue = seed;
 		let index = startPos;
+		const count = endPos;
 
-		let remaining = endPos;
-		while (remaining-- > 0) {
-			currValue = CRC8StreamHandler._decode(currValue, buffer[index]);
-			index++;
+		const pairEnd = index + (count & ~1);
+		while (index < pairEnd) {
+			const x = currValue ^ buffer[index] ^ (buffer[index + 1] << 8);
+			currValue = (table2[x & 0xFF] ^ table[(x >>> 8) & 0xFF]) & 0xFFFF;
+			index += 2;
+		}
+		if ((count & 1) !== 0) {
+			const value = buffer[index];
+			currValue = ((currValue >>> 8) ^ table[(value ^ currValue) & 0xFF]) & 0xFFFF;
 		}
 
 		return currValue;

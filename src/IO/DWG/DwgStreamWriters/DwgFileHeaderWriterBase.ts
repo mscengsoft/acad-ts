@@ -89,9 +89,8 @@ export abstract class DwgFileHeaderWriterBase<T extends DwgFileHeader> implement
 	/** Write bytes to the output stream at current position */
 	protected writeToStream(data: Uint8Array, offset: number = 0, length?: number): void {
 		const len = length ?? data.length;
-		for (let i = 0; i < len; i++) {
-			this._stream[this._streamPosition++] = data[offset + i];
-		}
+		this._stream.set(data.subarray(offset, offset + len), this._streamPosition);
+		this._streamPosition += len;
 	}
 
 	/** Write a 32-bit unsigned int to the output stream */

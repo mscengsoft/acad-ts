@@ -264,9 +264,10 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
 
     const map = DxfMap.create(typeof objectType === 'string' ? objectType : objectType.name);
 
+    const isExtendedData = { value: false };
     while (this._reader.dxfCode !== DxfCode.Start) {
       if (!readObject(template, map)) {
-        const isExtendedData = { value: false };
+        isExtendedData.value = false;
         this.readCommonCodes(template, isExtendedData, map);
         if (isExtendedData.value) {
           continue;
@@ -282,6 +283,10 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         this._reader.readNext();
       }
     }
+
+		if (template instanceof CadProxyObjectTemplate) {
+			template.finalizeData();
+		}
 
     return template;
   }
@@ -308,7 +313,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         }
         return false;
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.fieldList)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.fieldList)!);
     }
   }
 
@@ -341,7 +346,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         tmp.childrenHandles.push(this._reader.valueAsHandle);
         return true;
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.field)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.field)!);
     }
   }
 
@@ -373,16 +378,10 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
       case 162:
         return true;
       case 310:
-        if (proxy.binaryData === null) {
-          proxy.binaryData = new Uint8Array(0);
-        }
-        proxy.binaryData = this._appendBinaryChunk(proxy.binaryData, this._reader.valueAsBinaryChunk);
+			tmp.addBinaryDataChunk(this._reader.valueAsBinaryChunk);
         return true;
       case 311:
-        if (proxy.data === null) {
-          proxy.data = new Uint8Array(0);
-        }
-        proxy.data = this._appendBinaryChunk(proxy.data, this._reader.valueAsBinaryChunk);
+			tmp.addDataChunk(this._reader.valueAsBinaryChunk);
         return true;
       case 330:
       case 340:
@@ -391,7 +390,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         tmp.entries.push(this._reader.valueAsHandle);
         return true;
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.proxyObject)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.proxyObject)!);
     }
   }
 
@@ -399,9 +398,9 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
     switch (this._reader.code as number) {
       default:
         if (!this.currentSubclass) {
-          return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(template.cadObject.subclassMarker)!);
+          return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(template.cadObject.subclassMarker)!);
         } else {
-          return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(this.currentSubclass)!);
+          return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(this.currentSubclass)!);
         }
     }
   }
@@ -414,9 +413,9 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         return true;
       default:
         if (!this.currentSubclass) {
-          return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(template.cadObject.subclassMarker)!);
+          return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(template.cadObject.subclassMarker)!);
         } else {
-          return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(this.currentSubclass)!);
+          return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(this.currentSubclass)!);
         }
     }
   }
@@ -424,7 +423,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
   private _readPlotSettings(template: CadTemplate, map: DxfMap): boolean {
     switch (this._reader.code as number) {
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.plotSettings)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.plotSettings)!);
     }
   }
 
@@ -483,7 +482,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         this.lockPointer = true;
         return true;
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.evalGraph)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.evalGraph)!);
     }
   }
 
@@ -501,7 +500,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         tmp.lasActiveViewportHandle = this._reader.valueAsHandle;
         return true;
       default:
-        if (!this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.layout)!)) {
+        if (!this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.layout)!)) {
           return this._readPlotSettings(template, map);
         }
         return true;
@@ -518,7 +517,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         tmp.handles.add(this._reader.valueAsHandle);
         return true;
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(template.cadObject.subclassMarker)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(template.cadObject.subclassMarker)!);
     }
   }
 
@@ -631,7 +630,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
       case 292:
         return true;
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(tmp.cadObject.subclassMarker)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(tmp.cadObject.subclassMarker)!);
     }
   }
 
@@ -662,7 +661,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
       case 147:
         return readMatrix(147, m => tmp.cadObject.refractionMatrix = m);
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(tmp.cadObject.subclassMarker)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(tmp.cadObject.subclassMarker)!);
     }
   }
 
@@ -671,7 +670,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
       case 70:
         return true;
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.scale)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.scale)!);
     }
   }
 
@@ -684,7 +683,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
     while (this._reader.dxfCode !== DxfCode.Start && this._reader.dxfCode !== DxfCode.Subclass) {
       switch (this._reader.code as number) {
         default:
-          if (!this.tryAssignCurrentValue(linkedData, map.subClasses.get(DxfSubclassMarker.linkedData)!)) {
+          if (!this.tryAssignCurrentValue(linkedData, map.getSubclass(DxfSubclassMarker.linkedData)!)) {
             this._builder.notify(`Unhandled dxf code ${this._reader.code} value ${this._reader.valueAsString} at readLinkedData ${this._reader.position}.`, NotificationType.None);
           }
           break;
@@ -735,7 +734,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
           tmp.sytleHandle = this._reader.valueAsHandle;
           break;
         default:
-          if (!this.tryAssignCurrentValue(tableContent, map.subClasses.get(DxfSubclassMarker.tableContent)!)) {
+          if (!this.tryAssignCurrentValue(tableContent, map.getSubclass(DxfSubclassMarker.tableContent)!)) {
             this._builder.notify(`Unhandled dxf code ${this._reader.code} value ${this._reader.valueAsString} at readTableContentSubclass ${this._reader.position}.`, NotificationType.None);
           }
           break;
@@ -791,7 +790,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
           }
           break;
         default:
-          if (!this.tryAssignCurrentValue(formattedTable, map.subClasses.get(DxfSubclassMarker.formattedTableData)!)) {
+          if (!this.tryAssignCurrentValue(formattedTable, map.getSubclass(DxfSubclassMarker.formattedTableData)!)) {
             this._builder.notify(`Unhandled dxf code ${this._reader.code} value ${this._reader.valueAsString} at readFormattedTableDataSubclass ${this._reader.position}.`, NotificationType.None);
           }
           break;
@@ -824,7 +823,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
           }
           break;
         default:
-          if (!this.tryAssignCurrentValue(tableContent, map.subClasses.get(DxfSubclassMarker.linkedTableData)!)) {
+          if (!this.tryAssignCurrentValue(tableContent, map.getSubclass(DxfSubclassMarker.linkedTableData)!)) {
             this._builder.notify(`Unhandled dxf code ${this._reader.code} value ${this._reader.valueAsString} at readLinkedTableDataSubclass ${this._reader.position}.`, NotificationType.None);
           }
           break;
@@ -1674,7 +1673,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
       }
       case 73:
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.spatialFilter)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.spatialFilter)!);
     }
   }
 
@@ -1701,7 +1700,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         return true;
       }
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(tmp.cadObject.subclassMarker)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(tmp.cadObject.subclassMarker)!);
     }
   }
 
@@ -1796,7 +1795,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         if (cellStyle) cellStyle.rightBorder.color = new Color(this._reader.valueAsShort);
         return true;
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(tmp.cadObject.subclassMarker)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(tmp.cadObject.subclassMarker)!);
     }
   }
 
@@ -1813,7 +1812,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         tmp.mTextStyleHandle = this._reader.valueAsHandle;
         return true;
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(tmp.cadObject.subclassMarker)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(tmp.cadObject.subclassMarker)!);
     }
   }
 
@@ -1826,14 +1825,14 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         this._reader.expectedCode(140);
         return true;
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.evalGraphExpr)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.evalGraphExpr)!);
     }
   }
 
   private _readBlockElement(template: CadTemplate, map: DxfMap): boolean {
     switch (this._reader.code as number) {
       default:
-        if (!this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.blockElement)!)) {
+        if (!this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.blockElement)!)) {
           return this._readEvaluationExpression(template, map);
         }
         return true;
@@ -1843,7 +1842,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
   private _readBlockAction(template: CadTemplate, map: DxfMap): boolean {
     switch (this._reader.code as number) {
       default:
-        if (!this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.blockAction)!)) {
+        if (!this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.blockAction)!)) {
           return this._readBlockElement(template, map);
         }
         return true;
@@ -1853,7 +1852,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
   private _readBlockActionBasePt(template: CadTemplate, map: DxfMap): boolean {
     switch (this._reader.code as number) {
       default:
-        if (!this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.blockActionBasePt)!)) {
+        if (!this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.blockActionBasePt)!)) {
           return this._readBlockAction(template, map);
         }
         return true;
@@ -1863,7 +1862,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
   private _readBlockRotationAction(template: CadTemplate, map: DxfMap): boolean {
     switch (this._reader.code as number) {
       default:
-        if (!this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.blockRotationAction)!)) {
+        if (!this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.blockRotationAction)!)) {
           return this._readBlockActionBasePt(template, map);
         }
         return true;
@@ -1873,7 +1872,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
   private _readBlockParameter(template: CadTemplate, map: DxfMap): boolean {
     switch (this._reader.code as number) {
       default:
-        if (!this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.blockParameter)!)) {
+        if (!this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.blockParameter)!)) {
           return this._readBlockElement(template, map);
         }
         return true;
@@ -1883,7 +1882,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
   private _readBlock1PtParameter(template: CadTemplate, map: DxfMap): boolean {
     switch (this._reader.code as number) {
       default:
-        if (!this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.block1PtParameter)!)) {
+        if (!this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.block1PtParameter)!)) {
           return this._readBlockParameter(template, map);
         }
         return true;
@@ -1925,7 +1924,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         }
         return false;
       default:
-        if (!this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.blockVisibilityParameter)!)) {
+        if (!this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.blockVisibilityParameter)!)) {
           return this._readBlock1PtParameter(template, map);
         }
         return true;
@@ -1991,7 +1990,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
   private _readBlockGrip(template: CadTemplate, map: DxfMap): boolean {
     switch (this._reader.code as number) {
       default:
-        if (!this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.blockGrip)!)) {
+        if (!this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.blockGrip)!)) {
           return this._readBlockElement(template, map);
         }
         return true;
@@ -2001,7 +2000,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
   private _readBlockRotationGrip(template: CadTemplate, map: DxfMap): boolean {
     switch (this._reader.code as number) {
       default:
-        if (!this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.blockRotationGrip)!)) {
+        if (!this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.blockRotationGrip)!)) {
           return this._readBlockGrip(template, map);
         }
         return true;
@@ -2011,7 +2010,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
   private _readBlockVisibilityGrip(template: CadTemplate, map: DxfMap): boolean {
     switch (this._reader.code as number) {
       default:
-        if (!this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.blockVisibilityGrip)!)) {
+        if (!this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.blockVisibilityGrip)!)) {
           return this._readBlockGrip(template, map);
         }
         return true;
@@ -2026,14 +2025,14 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         tmp.blockHandle = this._reader.valueAsHandle;
         return true;
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(tmp.cadObject.subclassMarker)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(tmp.cadObject.subclassMarker)!);
     }
   }
 
   private _readBlockGripExpression(template: CadTemplate, map: DxfMap): boolean {
     switch (this._reader.code as number) {
       default:
-        if (!this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.blockGripExpression)!)) {
+        if (!this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.blockGripExpression)!)) {
           return this._readEvaluationExpression(template, map);
         }
         return true;
@@ -2051,7 +2050,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         }
         return false;
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.xRecord)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.xRecord)!);
     }
   }
 
@@ -2095,7 +2094,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         color.name = this._reader.valueAsString;
         return true;
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.dbColor)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.dbColor)!);
     }
   }
 
@@ -2148,7 +2147,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         }
         return false;
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(tmp.cadObject.subclassMarker)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(tmp.cadObject.subclassMarker)!);
     }
   }
 
@@ -2218,18 +2217,19 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
       case 281:
         cadDictionary.clonningFlags = this._reader.value as DictionaryCloningFlags;
         return true;
-      case 3:
-        tmp.entries.set(this._reader.valueAsString, null);
+      case 3: {
+        const entryName = this._reader.valueAsString;
+        tmp.entries.set(entryName, null);
+        tmp.lastEntryName = entryName;
         return true;
+      }
       case 350:
       case 360: {
-        const keys = Array.from(tmp.entries.keys());
-        const lastKey = keys[keys.length - 1];
-        tmp.entries.set(lastKey, this._reader.valueAsHandle);
+        tmp.entries.set(tmp.lastEntryName as string, this._reader.valueAsHandle);
         return true;
       }
       default:
-        return this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.dictionary)!);
+        return this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.dictionary)!);
     }
   }
 
@@ -2241,7 +2241,7 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
         tmp.defaultEntryHandle = this._reader.valueAsHandle;
         return true;
       default:
-        if (!this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.dictionaryWithDefault)!)) {
+        if (!this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.dictionaryWithDefault)!)) {
           return this._readDictionary(template, map);
         }
         return true;
@@ -2287,16 +2287,5 @@ export class DxfObjectsSectionReader extends DxfSectionReaderBase {
     }
 
     return template;
-  }
-
-  private _appendBinaryChunk(current: Uint8Array | null, chunk: Uint8Array): Uint8Array {
-    if (current === null || current.length === 0) {
-      return new Uint8Array(chunk);
-    }
-
-    const combined = new Uint8Array(current.length + chunk.length);
-    combined.set(current, 0);
-    combined.set(chunk, current.length);
-    return combined;
   }
 }

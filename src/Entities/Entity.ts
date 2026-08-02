@@ -28,7 +28,9 @@ export abstract class Entity extends CadObject implements IEntity {
 	isInvisible: boolean = false;
 
 	get layer(): Layer {
-		return this._layer;
+		// Lazy default: readers replace the layer during document build, so
+		// eagerly allocating a default Layer per entity is pure GC pressure.
+		return this._layer ??= Layer.default;
 	}
 	set layer(value: Layer) {
 		if (value == null) {
@@ -38,7 +40,7 @@ export abstract class Entity extends CadObject implements IEntity {
 	}
 
 	get lineType(): LineType {
-		return this._lineType;
+		return this._lineType ??= LineType.byLayer;
 	}
 	set lineType(value: LineType) {
 		if (value == null) {
@@ -60,8 +62,8 @@ export abstract class Entity extends CadObject implements IEntity {
 	transparency: Transparency = Transparency.byLayer;
 
 	private _bookColor: BookColor | null = null;
-	private _layer: Layer = Layer.default;
-	private _lineType: LineType = LineType.byLayer;
+	private _layer: Layer | null = null;
+	private _lineType: LineType | null = null;
 
 	constructor() {
 		super();

@@ -10,7 +10,16 @@ interface CadObjectTable<T extends CadObject> {
 
 export abstract class CadObject implements IHandledCadObject {
 	public document: CadDocument | null = null;
-	public extendedData!: ExtendedDataDictionary;
+	private _extendedData: ExtendedDataDictionary | null = null;
+
+	// Lazy: most objects never receive extended data, and one dictionary
+	// (plus its backing Map) per object is measurable GC pressure.
+	public get extendedData(): ExtendedDataDictionary {
+		return this._extendedData ??= new ExtendedDataDictionary(this);
+	}
+	public set extendedData(value: ExtendedDataDictionary) {
+		this._extendedData = value;
+	}
 	public handle: number = 0;
 	public get hasDynamicSubclass(): boolean { return false; }
 	public get objectName(): string { return ""; }
@@ -37,7 +46,6 @@ export abstract class CadObject implements IHandledCadObject {
 	private _xdictionary: CadDictionary | null = null;
 
 	constructor() {
-		this.extendedData = new ExtendedDataDictionary(this);
 	}
 
 	public addReactor(reactor: CadObject): void {
@@ -96,7 +104,7 @@ export abstract class CadObject implements IHandledCadObject {
 		if (this.xDictionary != null) {
 			doc.registerCollection(this.xDictionary);
 		}
-		if (this.extendedData.size > 0) {
+		if (this._extendedData != null && this._extendedData.size > 0) {
 			const entries = [...this.extendedData.entries()];
 			this.extendedData.clear();
 			for (const [key, value] of entries) {
@@ -112,7 +120,7 @@ export abstract class CadObject implements IHandledCadObject {
 		}
 		this.handle = 0;
 		this.document = null;
-		if (this.extendedData.size > 0) {
+		if (this._extendedData != null && this._extendedData.size > 0) {
 			const entries = [...this.extendedData.entries()];
 			this.extendedData.clear();
 			for (const [key, value] of entries) {

@@ -1,4 +1,4 @@
-import { DxfMapBase } from './DxfMapBase.js';
+import { DxfMapBase, lockDxfProperties } from './DxfMapBase.js';
 import { DxfClassMap } from './DxfClassMap.js';
 import { DxfProperty } from './DxfProperty.js';
 import { getClassMetadata } from './Metadata/MetadataStore.js';
@@ -7,6 +7,24 @@ export class DxfMap extends DxfMapBase {
 	private static readonly _cache: Map<string, DxfMap> = new Map();
 
 	public subClasses: Map<string, DxfClassMap> = new Map();
+
+	// Single-entry memo for the per-token subclass lookups in the section
+	// readers. Invalidated via the size guard: reader-side mutations only
+	// ever ADD subclass entries (dimension subtype maps), never replace one.
+	private _lastSubclassName: string | null = null;
+	private _lastSubclass: DxfClassMap | undefined;
+	private _lastSubclassSize: number = -1;
+
+	public getSubclass(name: string): DxfClassMap | undefined {
+		if (name === this._lastSubclassName && this._lastSubclassSize === this.subClasses.size) {
+			return this._lastSubclass;
+		}
+		const result = this.subClasses.get(name);
+		this._lastSubclassName = name;
+		this._lastSubclass = result;
+		this._lastSubclassSize = this.subClasses.size;
+		return result;
+	}
 
 	public static create(type: Function | string, name?: string): DxfMap {
 		const typeName = typeof type === 'string' ? type : type.name;
@@ -55,6 +73,13 @@ export class DxfMap extends DxfMapBase {
 			map.subClasses = new Map([...map.subClasses.entries()].reverse());
 		}
 
+		// Cached maps (and their subclass maps) are shared across every clone
+		// and read; lock so accidental mutation fails loudly instead of
+		// corrupting subsequent documents.
+		lockDxfProperties(map);
+		for (const subClass of map.subClasses.values()) {
+			lockDxfProperties(subClass);
+		}
 		DxfMap._cache.set(typeName, map);
 		return DxfMap._clone(map, name);
 	}
@@ -70,12 +95,10 @@ export class DxfMap extends DxfMapBase {
 	private static _clone(source: DxfMap, name?: string): DxfMap {
 		const map = new DxfMap();
 		map.name = name ?? source.name;
-		for (const [k, v] of source.dxfProperties) {
-			map.dxfProperties.set(k, v);
-		}
-		for (const [k, v] of source.subClasses) {
-			map.subClasses.set(k, v);
-		}
+		// dxfProperties is never mutated after construction (only subClasses is),
+		// so clones can share the cached Map instead of copying it per entity.
+		map.dxfProperties = source.dxfProperties;
+		map.subClasses = new Map(source.subClasses);
 		return map;
 	}
 }

@@ -103,7 +103,7 @@ export class DxfBlockSectionReader extends DxfSectionReaderBase {
           }
           break;
         default:
-          if (!this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.blockBegin))) {
+          if (!this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.blockBegin))) {
             const isExtendedData = { value: false };
             this.readCommonEntityCodes(template, isExtendedData, map);
             if (isExtendedData.value) {
@@ -188,7 +188,7 @@ export class DxfBlockSectionReader extends DxfSectionReaderBase {
     }
 
     while (this._reader.dxfCode !== DxfCode.Start) {
-      if (!this.tryAssignCurrentValue(template.cadObject, map.subClasses.get(DxfSubclassMarker.blockEnd))) {
+      if (!this.tryAssignCurrentValue(template.cadObject, map.getSubclass(DxfSubclassMarker.blockEnd))) {
         const isExtendedData = { value: false };
         this.readCommonEntityCodes(template, isExtendedData, map);
         if (isExtendedData.value) {

@@ -13,11 +13,35 @@ function isVector(value: unknown): value is XY | XYZ {
 	return value instanceof XY || value instanceof XYZ;
 }
 
+function getVectorCoordinate(value: XY | XYZ, index: number): number | undefined {
+	switch (index) {
+		case 0: return value.x;
+		case 1: return value.y;
+		case 2: return value instanceof XYZ ? value.z : undefined;
+		default: return undefined;
+	}
+}
+
 function toNumber(value: unknown): number {
 	return typeof value === 'number' ? value : Number(value);
 }
 
 type PropertyBag = Record<string, unknown>;
+
+enum PropertySetterKind {
+	Unknown,
+	VectorXY,
+	VectorXYZ,
+	Color,
+	PaperMargin,
+	Transparency,
+	Date,
+	Timespan,
+	Boolean,
+	String,
+	Number,
+	Direct,
+}
 
 export abstract class DxfPropertyBase {
 	public get assignedCode(): number {
@@ -46,6 +70,7 @@ export abstract class DxfPropertyBase {
 	protected _propertyName: string = "";
 	protected _collectionCodes: number[] | null = null;
 	protected _valueKind: PropertyMetadata['valueKind'];
+	private _setterKind: PropertySetterKind = PropertySetterKind.Unknown;
 
 	constructor(propertyName: string, dxfCodes: number[]);
 	constructor(metadata: PropertyMetadata);
@@ -69,85 +94,101 @@ export abstract class DxfPropertyBase {
 			return;
 		}
 
-		const currentValue = this.getPropertyValue(obj);
-
-		if (isVector(currentValue)) {
-			const index = Math.max(0, Math.floor(code / 10) % 10 - 1);
-			currentValue[index] = toNumber(value);
-			this.setPropertyValue(obj, currentValue);
-			return;
+		let kind = this._setterKind;
+		let currentValue: unknown;
+		if (kind === PropertySetterKind.Unknown) {
+			currentValue = this.getPropertyValue(obj);
+			kind = this._setterKind = this.getSetterKind(currentValue);
 		}
 
-		if (currentValue instanceof Color) {
-			switch (code) {
-				case 62:
-				case 70:
-					this.setPropertyValue(obj, new Color(toNumber(value)));
-					return;
-				case 90:
-				case 420: {
-					const colorValue = toNumber(value) >>> 0;
-					const red = (colorValue >> 16) & 0xFF;
-					const green = (colorValue >> 8) & 0xFF;
-					const blue = colorValue & 0xFF;
-					this.setPropertyValue(obj, new Color(red, green, blue));
-					return;
+		switch (kind) {
+			case PropertySetterKind.VectorXY: {
+				const vector = this.getPropertyValue(obj) as XY;
+				const coordinate = typeof value === 'number' ? value : Number(value);
+				const index = ((code / 10) | 0) % 10 - 1;
+				if (index === 1) vector.y = coordinate;
+				else if (index <= 0) vector.x = coordinate;
+				return;
+			}
+			case PropertySetterKind.VectorXYZ: {
+				const vector = this.getPropertyValue(obj) as XYZ;
+				const coordinate = typeof value === 'number' ? value : Number(value);
+				const index = ((code / 10) | 0) % 10 - 1;
+				if (index === 1) vector.y = coordinate;
+				else if (index === 2) vector.z = coordinate;
+				else if (index <= 0) vector.x = coordinate;
+				return;
+			}
+			case PropertySetterKind.Color:
+				switch (code) {
+					case 62:
+					case 70:
+						this.setPropertyValue(obj, new Color(toNumber(value)));
+						return;
+					case 90:
+					case 420: {
+						const colorValue = toNumber(value) >>> 0;
+						this.setPropertyValue(obj, new Color(
+							(colorValue >> 16) & 0xFF,
+							(colorValue >> 8) & 0xFF,
+							colorValue & 0xFF,
+						));
+						return;
+					}
+					default:
+						this.setPropertyValue(obj, value);
+						return;
 				}
+			case PropertySetterKind.PaperMargin: {
+				currentValue ??= this.getPropertyValue(obj);
+				if (!(currentValue instanceof PaperMargin)) return;
+				let margin = currentValue;
+				switch (code) {
+					case 40: margin = new PaperMargin(toNumber(value), margin.bottom, margin.right, margin.top); break;
+					case 41: margin = new PaperMargin(margin.left, toNumber(value), margin.right, margin.top); break;
+					case 42: margin = new PaperMargin(margin.left, margin.bottom, toNumber(value), margin.top); break;
+					case 43: margin = new PaperMargin(margin.left, margin.bottom, margin.right, toNumber(value)); break;
+				}
+				this.setPropertyValue(obj, margin);
+				return;
 			}
+			case PropertySetterKind.Transparency:
+				this.setPropertyValue(obj, Transparency.fromAlphaValue(toNumber(value)));
+				return;
+			case PropertySetterKind.Date:
+				this.setPropertyValue(obj, value instanceof Date ? value : CadUtils.fromJulianCalendar(toNumber(value)));
+				return;
+			case PropertySetterKind.Timespan:
+				this.setPropertyValue(obj, toNumber(value) * 86400000);
+				return;
+			case PropertySetterKind.Boolean:
+				this.setPropertyValue(obj, typeof value === 'boolean' ? value : toNumber(value) !== 0);
+				return;
+			case PropertySetterKind.String:
+				this.setPropertyValue(obj, value == null ? '' : String(value));
+				return;
+			case PropertySetterKind.Number:
+				this.setPropertyValue(obj, toNumber(value));
+				return;
+			default:
+				this.setPropertyValue(obj, value);
 		}
+	}
 
-		if (currentValue instanceof PaperMargin) {
-			let margin = currentValue;
-			switch (code) {
-				case 40:
-					margin = new PaperMargin(toNumber(value), margin.bottom, margin.right, margin.top);
-					break;
-				case 41:
-					margin = new PaperMargin(margin.left, toNumber(value), margin.right, margin.top);
-					break;
-				case 42:
-					margin = new PaperMargin(margin.left, margin.bottom, toNumber(value), margin.top);
-					break;
-				case 43:
-					margin = new PaperMargin(margin.left, margin.bottom, margin.right, toNumber(value));
-					break;
-			}
-
-			this.setPropertyValue(obj, margin);
-			return;
+	private getSetterKind(currentValue: unknown): PropertySetterKind {
+		if (currentValue instanceof XYZ) return PropertySetterKind.VectorXYZ;
+		if (currentValue instanceof XY) return PropertySetterKind.VectorXY;
+		if (currentValue instanceof Color) return PropertySetterKind.Color;
+		if (currentValue instanceof PaperMargin) return PropertySetterKind.PaperMargin;
+		if (currentValue instanceof Transparency) return PropertySetterKind.Transparency;
+		if (this._valueKind === 'date' || currentValue instanceof Date) return PropertySetterKind.Date;
+		if (this._valueKind === 'timespan') return PropertySetterKind.Timespan;
+		switch (typeof currentValue) {
+			case 'boolean': return PropertySetterKind.Boolean;
+			case 'string': return PropertySetterKind.String;
+			case 'number': return PropertySetterKind.Number;
+			default: return PropertySetterKind.Direct;
 		}
-
-		if (currentValue instanceof Transparency) {
-			this.setPropertyValue(obj, Transparency.fromAlphaValue(toNumber(value)));
-			return;
-		}
-
-		if (this._valueKind === 'date' || currentValue instanceof Date) {
-			this.setPropertyValue(obj, value instanceof Date ? value : CadUtils.fromJulianCalendar(toNumber(value)));
-			return;
-		}
-
-		if (this._valueKind === 'timespan') {
-			this.setPropertyValue(obj, toNumber(value) * 86400000);
-			return;
-		}
-
-		if (typeof currentValue === 'boolean') {
-			this.setPropertyValue(obj, typeof value === 'boolean' ? value : toNumber(value) !== 0);
-			return;
-		}
-
-		if (typeof currentValue === 'string') {
-			this.setPropertyValue(obj, value == null ? '' : String(value));
-			return;
-		}
-
-		if (typeof currentValue === 'number') {
-			this.setPropertyValue(obj, toNumber(value));
-			return;
-		}
-
-		this.setPropertyValue(obj, value);
 	}
 
 	public applyValues(obj: object | null | undefined, values: unknown[]): void {
@@ -176,12 +217,72 @@ export abstract class DxfPropertyBase {
 		return this.getRawValueByCode(this.assignedCode, obj);
 	}
 
+	// One compiled accessor pair per property gives V8 a dedicated inline cache
+	// per property name, instead of a single megamorphic keyed-access site
+	// shared by every property of every class. Falls back to dynamic access
+	// where code generation is unavailable (e.g. CSP without unsafe-eval).
+	private static _canCompileAccessors: boolean | null = null;
+	private static readonly _identifierPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+	private static readonly _unsafeNames = new Set(['__proto__', 'constructor', 'prototype']);
+
+	private static _isCompilableName(name: string): boolean {
+		// Property names originate from the library's static metadata tables,
+		// never from file content. The identifier pattern makes escaping the
+		// generated `o.NAME` expression impossible, and prototype-affecting
+		// names are excluded outright as defense in depth.
+		return DxfPropertyBase._identifierPattern.test(name) && !DxfPropertyBase._unsafeNames.has(name);
+	}
+
+	private _compiledGetter: ((obj: PropertyBag) => unknown) | null = null;
+	private _compiledSetter: ((obj: PropertyBag, value: unknown) => void) | null = null;
+
 	protected getPropertyValue(obj: object | null | undefined): unknown {
-		return (obj as PropertyBag | null | undefined)?.[this._propertyName];
+		if (obj == null) {
+			return undefined;
+		}
+		let getter = this._compiledGetter;
+		if (getter === null) {
+			getter = this._compileGetter();
+			this._compiledGetter = getter;
+		}
+		return getter(obj as PropertyBag);
 	}
 
 	protected setPropertyValue(obj: object, value: unknown): void {
-		(obj as PropertyBag)[this._propertyName] = value;
+		let setter = this._compiledSetter;
+		if (setter === null) {
+			setter = this._compileSetter();
+			this._compiledSetter = setter;
+		}
+		setter(obj as PropertyBag, value);
+	}
+
+	private _compileGetter(): (obj: PropertyBag) => unknown {
+		const name = this._propertyName;
+		if (DxfPropertyBase._canCompileAccessors !== false && DxfPropertyBase._isCompilableName(name)) {
+			try {
+				const getter = new Function('o', `return o.${name};`) as (obj: PropertyBag) => unknown;
+				DxfPropertyBase._canCompileAccessors = true;
+				return getter;
+			} catch {
+				DxfPropertyBase._canCompileAccessors = false;
+			}
+		}
+		return (o) => o[name];
+	}
+
+	private _compileSetter(): (obj: PropertyBag, value: unknown) => void {
+		const name = this._propertyName;
+		if (DxfPropertyBase._canCompileAccessors !== false && DxfPropertyBase._isCompilableName(name)) {
+			try {
+				const setter = new Function('o', 'v', `o.${name} = v;`) as (obj: PropertyBag, value: unknown) => void;
+				DxfPropertyBase._canCompileAccessors = true;
+				return setter;
+			} catch {
+				DxfPropertyBase._canCompileAccessors = false;
+			}
+		}
+		return (o, v) => { o[name] = v; };
 	}
 
 	protected getRawValueByCode(code: number, obj: object): unknown {
@@ -200,7 +301,7 @@ export abstract class DxfPropertyBase {
 
 		if (isVector(value)) {
 			const index = Math.max(0, Math.floor(code / 10) % 10 - 1);
-			return value[index];
+			return getVectorCoordinate(value, index);
 		}
 
 		if (this._valueKind === 'date' || value instanceof Date) {

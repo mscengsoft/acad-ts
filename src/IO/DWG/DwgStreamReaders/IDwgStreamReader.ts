@@ -76,6 +76,7 @@ export interface IDwgStreamReader {
 	readBitThickness(): number;
 	readByte(): number;
 	readBytes(length: number): Uint8Array;
+	readBytesView(length: number): Uint8Array;
 	readCmColor(useTextStream?: boolean): Color;
 	readColorByIndex(): Color;
 	readDateTime(): Date;

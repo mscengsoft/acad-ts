@@ -256,17 +256,32 @@ export class CadDocument implements IHandledCadObject {
 		}
 		DxfClassCollection.updateDxfClasses(this);
 
+		// Count instances per object name in one pass instead of re-scanning
+		// the whole object map for every registered class.
+		const instanceCounts = new Map<string, number>();
+		for (const cadObject of this._cadObjects.values()) {
+			if (cadObject instanceof CadObject) {
+				const name = cadObject.objectName;
+				instanceCounts.set(name, (instanceCounts.get(name) ?? 0) + 1);
+			}
+		}
+
 		for (const item of this.classes ?? []) {
-			item.instanceCount = Array.from(this._cadObjects.values())
-				.filter((cadObject): cadObject is CadObject => cadObject instanceof CadObject)
-				.filter((cadObject) => cadObject.objectName === item.dxfName)
-				.length;
+			item.instanceCount = instanceCounts.get(item.dxfName) ?? 0;
 		}
 	}
 
 	public updateImageReactors(): void {
-		const reactors = Array.from(this._cadObjects.values())
-			.filter((cadObject): cadObject is ImageDefinitionReactor => cadObject instanceof ImageDefinitionReactor);
+		// Single pass over the object map for both object kinds.
+		const reactors: ImageDefinitionReactor[] = [];
+		const rasterImages: RasterImage[] = [];
+		for (const cadObject of this._cadObjects.values()) {
+			if (cadObject instanceof ImageDefinitionReactor) {
+				reactors.push(cadObject);
+			} else if (cadObject instanceof RasterImage) {
+				rasterImages.push(cadObject);
+			}
+		}
 		const reactorsByImage = new Map<number, ImageDefinitionReactor>();
 		for (const reactor of reactors) {
 			const imageHandle = reactor.image?.handle;
@@ -275,8 +290,6 @@ export class CadDocument implements IHandledCadObject {
 			}
 		}
 
-		const rasterImages = Array.from(this._cadObjects.values())
-			.filter((cadObject): cadObject is RasterImage => cadObject instanceof RasterImage);
 		const usedReactors = new Set<ImageDefinitionReactor>();
 
 		for (const image of rasterImages) {

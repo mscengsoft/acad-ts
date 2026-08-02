@@ -126,6 +126,10 @@ export class DwgMergedReader implements IDwgStreamReader {
 		return this._mainReader.readBytes(length);
 	}
 
+	readBytesView(length: number): Uint8Array {
+		return this._mainReader.readBytesView(length);
+	}
+
 	read2BitDoubleWithDefault(defValues: XY): XY {
 		return this._mainReader.read2BitDoubleWithDefault(defValues);
 	}

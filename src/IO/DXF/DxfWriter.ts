@@ -35,21 +35,44 @@ class Uint8ArrayTextOutput implements DxfTextOutput {
   private readonly _encoding: string;
   private _position: number = 0;
 
+  // Small strings are batched and encoded in one pass; encoding per fragment
+  // dominates the ASCII writer otherwise.
+  private _pending: string[] = [];
+  private _pendingLength: number = 0;
+
   public constructor(stream: Uint8Array, encoding: string) {
     this._stream = stream;
     this._encoding = encoding;
   }
 
   public write(value: string): void {
-    const bytes = encodeCadString(value, this._encoding);
+    this._pending.push(value);
+    this._pendingLength += value.length;
+    if (this._pendingLength >= 0x8000) {
+      this._flushPending();
+    }
+  }
+
+  public flush(): void {
+    this._flushPending();
+  }
+
+  public close(): void {
+    this._flushPending();
+  }
+
+  private _flushPending(): void {
+    if (this._pendingLength === 0) {
+      return;
+    }
+    const text = this._pending.length === 1 ? this._pending[0] : this._pending.join('');
+    this._pending.length = 0;
+    this._pendingLength = 0;
+    const bytes = encodeCadString(text, this._encoding);
     this._ensureCapacity(bytes.length);
     this._stream.set(bytes, this._position);
     this._position += bytes.length;
   }
-
-  public flush(): void {}
-
-  public close(): void {}
 
   private _ensureCapacity(length: number): void {
     if (this._position + length > this._stream.length) {

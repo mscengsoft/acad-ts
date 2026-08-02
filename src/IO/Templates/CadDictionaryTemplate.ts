@@ -10,6 +10,10 @@ import { ICadDictionaryTemplate } from './ICadDictionaryTemplate.js';
 export class CadDictionaryTemplate extends CadTemplateT<CadDictionary> implements ICadDictionaryTemplate {
 	entries: Map<string, number | null> = new Map();
 
+	/** Name of the most recently added entry, so the following 350/360 handle
+	 * token can be paired without scanning all keys (O(n²) on big dictionaries). */
+	lastEntryName: string | null = null;
+
 	constructor(dictionary?: CadDictionary) {
 		super(dictionary ?? new CadDictionary());
 	}

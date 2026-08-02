@@ -42,6 +42,9 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
+    "check": "npm run build && npm test && npm audit --audit-level=high",
+    "benchmark": "npm run build && node --expose-gc tools/benchmark-readers.mjs",
+    "benchmark:writers": "npm run build && node --expose-gc tools/benchmark-writers.mjs",
     "prepublishOnly": "npm run build && npm run bundle",
     "bundle": "esbuild ./dist/index.js --format=esm --minify --platform=neutral --bundle --outfile=./dist/index-min.js"
   },

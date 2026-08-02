@@ -51,6 +51,30 @@ export abstract class CadDocumentBuilder {
 	views: ViewsTable = new ViewsTable();
 	vPorts: VPortsTable = new VPortsTable();
 
+	// Memoized name lookups for the build phase: nearly every entity resolves
+	// its layer and line type by name ("ByLayer"/"Continuous"/"0"/...), and the
+	// tables are fully populated before entity templates build.
+	private _layerNameCache: Map<string, Layer | null> = new Map();
+	private _lineTypeNameCache: Map<string, LineType | null> = new Map();
+
+	tryGetCachedLayer(name: string): Layer | null {
+		let entry = this._layerNameCache.get(name);
+		if (entry === undefined) {
+			entry = (this.layers?.tryGetValue(name) as Layer | undefined) ?? null;
+			this._layerNameCache.set(name, entry);
+		}
+		return entry;
+	}
+
+	tryGetCachedLineType(name: string): LineType | null {
+		let entry = this._lineTypeNameCache.get(name);
+		if (entry === undefined) {
+			entry = (this.lineTypesTable?.tryGetValue(name) as LineType | undefined) ?? null;
+			this._lineTypeNameCache.set(name, entry);
+		}
+		return entry;
+	}
+
 	protected cadObjects: Map<number, CadObject> = new Map();
 	protected cadObjectsTemplates: Map<number, ICadObjectTemplate> = new Map();
 	protected dictionaryTemplates: Map<number, ICadDictionaryTemplate> = new Map();

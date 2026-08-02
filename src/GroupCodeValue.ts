@@ -1,6 +1,49 @@
 import { DxfCode } from './DxfCode.js';
 import { GroupCodeValueType } from './GroupCodeValueType.js';
 
+const groupCodeTypes = new Uint8Array(1072);
+const setGroupCodeType = (start: number, end: number, type: GroupCodeValueType): void => {
+	groupCodeTypes.fill(type, start, end + 1);
+};
+
+setGroupCodeType(0, 4, GroupCodeValueType.String);
+groupCodeTypes[5] = GroupCodeValueType.Handle;
+setGroupCodeType(6, 9, GroupCodeValueType.String);
+setGroupCodeType(10, 39, GroupCodeValueType.Point3D);
+setGroupCodeType(40, 59, GroupCodeValueType.Double);
+setGroupCodeType(60, 79, GroupCodeValueType.Int16);
+setGroupCodeType(90, 99, GroupCodeValueType.Int32);
+setGroupCodeType(100, 102, GroupCodeValueType.String);
+groupCodeTypes[105] = GroupCodeValueType.Handle;
+setGroupCodeType(110, 149, GroupCodeValueType.Double);
+setGroupCodeType(160, 169, GroupCodeValueType.Int64);
+setGroupCodeType(170, 179, GroupCodeValueType.Int16);
+setGroupCodeType(210, 239, GroupCodeValueType.Double);
+setGroupCodeType(270, 279, GroupCodeValueType.Int16);
+setGroupCodeType(280, 289, GroupCodeValueType.Byte);
+setGroupCodeType(290, 299, GroupCodeValueType.Bool);
+setGroupCodeType(300, 309, GroupCodeValueType.String);
+setGroupCodeType(310, 319, GroupCodeValueType.Chunk);
+setGroupCodeType(320, 329, GroupCodeValueType.Handle);
+setGroupCodeType(330, 369, GroupCodeValueType.ObjectId);
+setGroupCodeType(370, 389, GroupCodeValueType.Int16);
+setGroupCodeType(390, 399, GroupCodeValueType.ObjectId);
+setGroupCodeType(400, 409, GroupCodeValueType.Int16);
+setGroupCodeType(410, 419, GroupCodeValueType.String);
+setGroupCodeType(420, 429, GroupCodeValueType.Int32);
+setGroupCodeType(430, 439, GroupCodeValueType.String);
+setGroupCodeType(440, 459, GroupCodeValueType.Int32);
+setGroupCodeType(460, 469, GroupCodeValueType.Double);
+setGroupCodeType(470, 479, GroupCodeValueType.String);
+setGroupCodeType(480, 481, GroupCodeValueType.Handle);
+groupCodeTypes[999] = GroupCodeValueType.Comment;
+setGroupCodeType(1000, 1003, GroupCodeValueType.ExtendedDataString);
+groupCodeTypes[1004] = GroupCodeValueType.ExtendedDataChunk;
+setGroupCodeType(1005, 1009, GroupCodeValueType.ExtendedDataHandle);
+setGroupCodeType(1010, 1059, GroupCodeValueType.ExtendedDataDouble);
+setGroupCodeType(1060, 1070, GroupCodeValueType.ExtendedDataInt16);
+groupCodeTypes[1071] = GroupCodeValueType.ExtendedDataInt32;
+
 export class GroupCodeValue {
 	public static isValidCode(code: DxfCode, value: unknown): boolean {
 		return GroupCodeValue.isValidGroupCode(GroupCodeValue.transformValue(code as number), value);
@@ -43,51 +86,10 @@ export class GroupCodeValue {
 	}
 
 	public static transformValue(code: number): GroupCodeValueType {
-		if (code >= 0 && code <= 4) return GroupCodeValueType.String;
-		if (code === 5) return GroupCodeValueType.Handle;
-		if (code >= 6 && code <= 9) return GroupCodeValueType.String;
-		if (code >= 10 && code <= 39) return GroupCodeValueType.Point3D;
-		if (code >= 40 && code <= 59) return GroupCodeValueType.Double;
-		if (code >= 60 && code <= 79) return GroupCodeValueType.Int16;
-		if (code >= 90 && code <= 99) return GroupCodeValueType.Int32;
-		if (code === 100) return GroupCodeValueType.String;
-		if (code === 101) return GroupCodeValueType.String;
-		if (code === 102) return GroupCodeValueType.String;
-		if (code === 105) return GroupCodeValueType.Handle;
-		if (code >= 110 && code <= 119) return GroupCodeValueType.Double;
-		if (code >= 120 && code <= 129) return GroupCodeValueType.Double;
-		if (code >= 130 && code <= 139) return GroupCodeValueType.Double;
-		if (code >= 140 && code <= 149) return GroupCodeValueType.Double;
-		if (code >= 160 && code <= 169) return GroupCodeValueType.Int64;
-		if (code >= 170 && code <= 179) return GroupCodeValueType.Int16;
-		if (code >= 210 && code <= 239) return GroupCodeValueType.Double;
-		if (code >= 270 && code <= 279) return GroupCodeValueType.Int16;
-		if (code >= 280 && code <= 289) return GroupCodeValueType.Byte;
-		if (code >= 290 && code <= 299) return GroupCodeValueType.Bool;
-		if (code >= 300 && code <= 309) return GroupCodeValueType.String;
-		if (code >= 310 && code <= 319) return GroupCodeValueType.Chunk;
-		if (code >= 320 && code <= 329) return GroupCodeValueType.Handle;
-		if (code >= 330 && code <= 369) return GroupCodeValueType.ObjectId;
-		if (code >= 370 && code <= 379) return GroupCodeValueType.Int16;
-		if (code >= 380 && code <= 389) return GroupCodeValueType.Int16;
-		if (code >= 390 && code <= 399) return GroupCodeValueType.ObjectId;
-		if (code >= 400 && code <= 409) return GroupCodeValueType.Int16;
-		if (code >= 410 && code <= 419) return GroupCodeValueType.String;
-		if (code >= 420 && code <= 429) return GroupCodeValueType.Int32;
-		if (code >= 430 && code <= 439) return GroupCodeValueType.String;
-		if (code >= 440 && code <= 449) return GroupCodeValueType.Int32;
-		if (code >= 450 && code <= 459) return GroupCodeValueType.Int32;
-		if (code >= 460 && code <= 469) return GroupCodeValueType.Double;
-		if (code >= 470 && code <= 479) return GroupCodeValueType.String;
-		if (code >= 480 && code <= 481) return GroupCodeValueType.Handle;
-		if (code === 999) return GroupCodeValueType.Comment;
-		if (code >= 1000 && code <= 1003) return GroupCodeValueType.ExtendedDataString;
-		if (code === 1004) return GroupCodeValueType.ExtendedDataChunk;
-		if (code >= 1005 && code <= 1009) return GroupCodeValueType.ExtendedDataHandle;
-		if (code >= 1010 && code <= 1059) return GroupCodeValueType.ExtendedDataDouble;
-		if (code >= 1060 && code <= 1070) return GroupCodeValueType.ExtendedDataInt16;
-		if (code === 1071) return GroupCodeValueType.ExtendedDataInt32;
-		return GroupCodeValueType.None;
+		if (code < 0 || code >= groupCodeTypes.length) {
+			return GroupCodeValueType.None;
+		}
+		return (groupCodeTypes[code] ?? GroupCodeValueType.None) as GroupCodeValueType;
 	}
 }
 

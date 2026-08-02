@@ -295,7 +295,9 @@ export class DwgObjectReader extends DwgSectionIO {
     this._builder = builder;
     this._reader = reader;
     this._handles = [...handles];
-    this._map = new Map(handleMap);
+    // Only ever read via .get; the caller does not reuse the map, so no
+    // defensive copy is needed.
+    this._map = handleMap;
     this._classes = new Map<number, DxfClass>();
     for (const c of classes) {
       this._classes.set(c.classNumber, c);
@@ -321,7 +323,17 @@ export class DwgObjectReader extends DwgSectionIO {
         continue;
       }
 
-      const type = this._getEntityType(offset);
+      let type: ObjectType;
+      try {
+        type = this._getEntityType(offset);
+      } catch (ex: unknown) {
+        // A corrupt handle-map offset can break reader positioning before the
+        // failsafe-guarded object read begins; degrade to skipping the object.
+        if (!this._builder.configuration.failsafe) throw ex;
+        this._builder.notify(`Could not resolve object type for handle: ${handle}`, NotificationType.Error, ex instanceof Error ? ex : null);
+        this._readedObjects.set(handle, ObjectType.INVALID);
+        continue;
+      }
       this._readedObjects.set(handle, type);
 
       let template: CadTemplate | null = null;
@@ -346,6 +358,66 @@ export class DwgObjectReader extends DwgSectionIO {
     }
   }
 
+  // One reusable stream reader per role (object/handles/text). Reader
+  // instances hold no per-object state besides their cursor (position,
+  // bitShift, isEmpty, last byte), and every use site re-positions the
+  // cursor first, so a single instance per role can service every object
+  // instead of allocating a new reader (subclass + DataView + scratch
+  // buffers) 2-3 times per object.
+  private readonly _readerPool: (IDwgStreamReader | null)[] = [null, null, null];
+
+  // Pooled reader for aligned XRecord regions (re-pointed per record).
+  private _xrecReader: DwgStreamReaderBase | null = null;
+
+  // Arena for aligned XRecord buffers: spans are never reused, so chunk-entry
+  // views into them stay valid while avoiding one allocation per record.
+  private _xrecArena: Uint8Array = new Uint8Array(0);
+  private _xrecArenaPos: number = 0;
+
+  private _allocXrecBuffer(size: number): Uint8Array {
+    if (size > 0x4000) {
+      return new Uint8Array(size);
+    }
+    if (this._xrecArenaPos + size > this._xrecArena.length) {
+      this._xrecArena = new Uint8Array(0x10000);
+      this._xrecArenaPos = 0;
+    }
+    const view = this._xrecArena.subarray(this._xrecArenaPos, this._xrecArenaPos + size);
+    this._xrecArenaPos += size;
+    return view;
+  }
+
+  // DwgMergedReader is a stateless delegator over the pooled readers, so one
+  // instance per sub-reader combination serves every object.
+  private _mergedCached: DwgMergedReader | null = null;
+  private _mergedMain: IDwgStreamReader | null = null;
+  private _mergedText: IDwgStreamReader | null = null;
+  private _mergedHandles: IDwgStreamReader | null = null;
+
+  private _getMergedReader(main: IDwgStreamReader, text: IDwgStreamReader, handles: IDwgStreamReader): DwgMergedReader {
+    if (this._mergedCached && this._mergedMain === main && this._mergedText === text && this._mergedHandles === handles) {
+      return this._mergedCached;
+    }
+    const merged = new DwgMergedReader(main, text, handles);
+    this._mergedCached = merged;
+    this._mergedMain = main;
+    this._mergedText = text;
+    this._mergedHandles = handles;
+    return merged;
+  }
+
+  private _rentReader(slot: number): IDwgStreamReader {
+    let reader = this._readerPool[slot];
+    if (!reader) {
+      reader = DwgStreamReaderBase.getStreamHandler(this._version, this._memoryStream, this._reader.encoding);
+      this._readerPool[slot] = reader;
+    } else {
+      reader.encoding = this._reader.encoding;
+      reader.isEmpty = false;
+    }
+    return reader;
+  }
+
   private _getEntityType(offset: number): ObjectType {
     let type: ObjectType = ObjectType.INVALID;
 
@@ -361,24 +433,24 @@ export class DwgObjectReader extends DwgSectionIO {
       const handleSectionOffset = this._crcReader.positionInBits() + sizeInBits - handleSize;
 			this._objectDataEndInBits = handleSectionOffset;
 
-      this._objectReader = DwgStreamReaderBase.getStreamHandler(this._version, this._memoryStream, this._reader.encoding);
+      this._objectReader = this._rentReader(0);
       this._objectReader.setPositionInBits(this._crcReader.positionInBits());
 
       this._objectInitialPos = this._objectReader.positionInBits();
       type = this._objectReader.readObjectType();
 
-      this._handlesReader = DwgStreamReaderBase.getStreamHandler(this._version, this._memoryStream, this._reader.encoding);
+      this._handlesReader = this._rentReader(1);
       this._handlesReader.setPositionInBits(handleSectionOffset);
 
-      this._textReader = DwgStreamReaderBase.getStreamHandler(this._version, this._memoryStream, this._reader.encoding);
+      this._textReader = this._rentReader(2);
       this._textReader.setPositionByFlag(handleSectionOffset - 1);
 
-      this._mergedReaders = new DwgMergedReader(this._objectReader, this._textReader, this._handlesReader);
+      this._mergedReaders = this._getMergedReader(this._objectReader, this._textReader, this._handlesReader);
     } else {
-      this._objectReader = DwgStreamReaderBase.getStreamHandler(this._version, this._memoryStream, this._reader.encoding);
+      this._objectReader = this._rentReader(0);
       this._objectReader.setPositionInBits(this._crcReader.positionInBits());
 
-      this._handlesReader = DwgStreamReaderBase.getStreamHandler(this._version, this._memoryStream, this._reader.encoding);
+      this._handlesReader = this._rentReader(1);
       this._textReader = this._objectReader;
 
       this._objectInitialPos = this._objectReader.positionInBits();
@@ -555,7 +627,7 @@ export class DwgObjectReader extends DwgSectionIO {
           record = new ExtendedDataControlString(this._objectReader.readByte() === 1);
           break;
         case DxfCode.ExtendedDataLayerName: {
-          const arr = this._objectReader.readBytes(8);
+          const arr = this._objectReader.readBytesView(8);
           const handle = BigEndianConverter.toUInt64(arr);
           record = new ExtendedDataLayer(handle);
           break;
@@ -564,7 +636,7 @@ export class DwgObjectReader extends DwgSectionIO {
           record = new ExtendedDataBinaryChunk(this._objectReader.readBytes(this._objectReader.readByte()));
           break;
         case DxfCode.ExtendedDataHandle: {
-          const arr = this._objectReader.readBytes(8);
+          const arr = this._objectReader.readBytesView(8);
           const handle = BigEndianConverter.toUInt64(arr);
           record = new ExtendedDataHandle(handle);
           break;
@@ -652,11 +724,11 @@ export class DwgObjectReader extends DwgSectionIO {
     this._handlesReader.setPositionInBits(size + this._objectInitialPos);
 
     if (this._version === ACadVersion.AC1021) {
-      this._textReader = DwgStreamReaderBase.getStreamHandler(this._version, this._memoryStream, this._reader.encoding);
+      this._textReader = this._rentReader(2);
       this._textReader.setPositionByFlag(size + this._objectInitialPos - 1);
     }
 
-    this._mergedReaders = new DwgMergedReader(this._objectReader, this._textReader, this._handlesReader);
+    this._mergedReaders = this._getMergedReader(this._objectReader, this._textReader, this._handlesReader);
   }
 
   private static _looksLikeUtf16Le(buffer: Uint8Array, offset: number): boolean {
@@ -1293,10 +1365,10 @@ export class DwgObjectReader extends DwgSectionIO {
     }
     let textarea: Uint8Array | null = null;
     if (this._version <= ACadVersion.AC1018) {
-      textarea = this._objectReader.readBytes(256);
+      textarea = this._objectReader.readBytesView(256);
     }
     if (this.r2007Plus && isText) {
-      textarea = this._objectReader.readBytes(512);
+      textarea = this._objectReader.readBytesView(512);
     }
     if (isText && textarea) {
       this._readLineTypeSegmentTexts(template.segmentTemplates, textarea);
@@ -2256,7 +2328,9 @@ export class DwgObjectReader extends DwgSectionIO {
 		if (version === 2) {
 			const start = this._objectReader.positionInBits();
 			const remaining = Math.max(0, Math.floor((this._objectDataEndInBits - start) / 8));
-			const preview = this._mergedReaders.readBytes(remaining);
+			// Read-only scan for the payload length; a view avoids copying the
+			// whole remaining object data (the cursor is rewound right after).
+			const preview = this._mergedReaders.readBytesView(remaining);
 			this._objectReader.setPositionInBits(start);
 			const length = DwgObjectReader._modelerPayloadLength(preview);
 			if (length > 0) {
@@ -2274,12 +2348,16 @@ export class DwgObjectReader extends DwgSectionIO {
 		return result;
 	}
 
+	private static readonly _acisBinaryHeader: Uint8Array = new TextEncoder().encode('ACIS BinaryFile');
+	private static readonly _acisEndMarkers: readonly Uint8Array[] = [
+		new Uint8Array([0x45, 0x6e, 0x64, 0x0e, 0x02, 0x6f, 0x66, 0x0e, 0x04, 0x41, 0x43, 0x49, 0x53, 0x0d, 0x04, 0x64, 0x61, 0x74, 0x61]),
+		new TextEncoder().encode('End-of-ACIS-data'),
+		new TextEncoder().encode('End-of-ASM-data'),
+	];
+
 	private static _modelerPayloadLength(data: Uint8Array): number {
-		const binaryHeader = new TextEncoder().encode('ACIS BinaryFile');
-		const encodedAcisEnd = new Uint8Array([0x45, 0x6e, 0x64, 0x0e, 0x02, 0x6f, 0x66, 0x0e, 0x04, 0x41, 0x43, 0x49, 0x53, 0x0d, 0x04, 0x64, 0x61, 0x74, 0x61]);
-		const plainEnds = [new TextEncoder().encode('End-of-ACIS-data'), new TextEncoder().encode('End-of-ASM-data')];
-		if (!DwgObjectReader._startsWith(data, binaryHeader)) return 0;
-		for (const marker of [encodedAcisEnd, ...plainEnds]) {
+		if (!DwgObjectReader._startsWith(data, DwgObjectReader._acisBinaryHeader)) return 0;
+		for (const marker of DwgObjectReader._acisEndMarkers) {
 			const index = DwgObjectReader._indexOfBytes(data, marker);
 			if (index >= 0) return index + marker.length;
 		}
@@ -2522,38 +2600,68 @@ export class DwgObjectReader extends DwgSectionIO {
     const xRecord = new XRecord();
     const template = new CadXRecordTemplate(xRecord);
     this._readCommonNonEntityData(template);
-    const offset = this._objectReader.readBitLong() + this._objectReader.position;
-    while (this._objectReader.position < offset) {
-      const code = this._objectReader.readShort();
+    const dataSize = this._objectReader.readBitLong();
+    const offset = dataSize + this._objectReader.position;
+
+    // The record data is a byte-oriented structure, but the object reader
+    // usually sits at a bit offset, which makes every entry read pay a
+    // per-byte shift. Shift the whole region once into an aligned buffer
+    // and read the entries from that instead. This also keeps chunk entries
+    // as views into the record's own small buffer rather than pinning the
+    // whole decompressed section.
+    let reader: IDwgStreamReader = this._objectReader;
+    let end = offset;
+    if (this._objectReader.bitShift !== 0 && dataSize > 0 && dataSize <= this._memoryStream.length - this._objectReader.position
+      && this._objectReader instanceof DwgStreamReaderBase) {
+      // Each record gets its own aligned span (chunk entries hold views
+      // into it), but the buffer comes from an arena and the reader
+      // servicing it is pooled and just re-pointed.
+      const alignedData = this._allocXrecBuffer(dataSize);
+      this._objectReader.readBytesInto(alignedData, dataSize);
+      let alignedReader = this._xrecReader;
+      if (!alignedReader) {
+        alignedReader = DwgStreamReaderBase.getStreamHandler(this._version, alignedData, this._reader.encoding) as DwgStreamReaderBase;
+        this._xrecReader = alignedReader;
+      } else {
+        alignedReader.rebind(alignedData);
+        alignedReader.encoding = this._reader.encoding;
+      }
+      reader = alignedReader;
+      end = dataSize;
+    }
+
+    try {
+    while (reader.position < end) {
+      const code = reader.readShort();
       const groupCode = GroupCodeValue.transformValue(code);
       switch (groupCode) {
         case GroupCodeValueType.String:
         case GroupCodeValueType.ExtendedDataString:
-          xRecord.createEntry(code, this._objectReader.readTextUnicode());
+          xRecord.createEntry(code, reader.readTextUnicode());
           break;
         case GroupCodeValueType.Point3D:
-          xRecord.createEntry(code, new XYZ(this._objectReader.readDouble(), this._objectReader.readDouble(), this._objectReader.readDouble()));
+          xRecord.createEntry(code, new XYZ(reader.readDouble(), reader.readDouble(), reader.readDouble()));
           break;
         case GroupCodeValueType.Double:
         case GroupCodeValueType.ExtendedDataDouble:
-          xRecord.createEntry(code, this._objectReader.readDouble());
+          xRecord.createEntry(code, reader.readDouble());
           break;
         case GroupCodeValueType.Byte:
-          xRecord.createEntry(code, this._objectReader.readByte());
+          xRecord.createEntry(code, reader.readByte());
           break;
         case GroupCodeValueType.Int16:
         case GroupCodeValueType.ExtendedDataInt16:
-          xRecord.createEntry(code, this._objectReader.readShort());
+          xRecord.createEntry(code, reader.readShort());
           break;
         case GroupCodeValueType.Int32:
         case GroupCodeValueType.ExtendedDataInt32:
-          xRecord.createEntry(code, this._objectReader.readRawLong());
+          xRecord.createEntry(code, reader.readRawLong());
           break;
         case GroupCodeValueType.Int64:
-          xRecord.createEntry(code, this._objectReader.readRawULong());
+          xRecord.createEntry(code, reader.readRawULong());
           break;
         case GroupCodeValueType.Handle: {
-          const hex = this._objectReader.readTextUnicode();
+          const hex = reader.readTextUnicode();
           const result = parseInt(hex, 16);
           if (!isNaN(result)) {
             template.addHandleReference(code, result);
@@ -2563,20 +2671,32 @@ export class DwgObjectReader extends DwgSectionIO {
           break;
         }
         case GroupCodeValueType.Bool:
-          xRecord.createEntry(code, this._objectReader.readByte() > 0);
+          xRecord.createEntry(code, reader.readByte() > 0);
           break;
         case GroupCodeValueType.Chunk:
         case GroupCodeValueType.ExtendedDataChunk:
-          xRecord.createEntry(code, this._objectReader.readBytes(this._objectReader.readByte()));
+          // In the aligned case the view targets the record's private
+          // buffer; otherwise copy so the entry does not pin the section.
+          xRecord.createEntry(code, reader !== this._objectReader
+            ? reader.readBytesView(reader.readByte())
+            : reader.readBytes(reader.readByte()));
           break;
         case GroupCodeValueType.ObjectId:
         case GroupCodeValueType.ExtendedDataHandle:
-          template.addHandleReference(code, this._objectReader.readRawULong());
+          template.addHandleReference(code, reader.readRawULong());
           break;
         default:
           this.notify(`Unidentified GroupCodeValueType ${code} for XRecord [${xRecord.handle}]`, NotificationType.Warning);
           break;
       }
+    }
+    } catch (ex: unknown) {
+      // A record whose last entry straddles the region end reads past the
+      // aligned sub-buffer; keep the entries parsed so far instead of failing
+      // the object. The main reader cursor already sits past the region, so
+      // the trailing cloning-flags/handles reads below are unaffected.
+      if (!(reader !== this._objectReader && ex instanceof RangeError)) throw ex;
+      this.notify(`XRecord [${xRecord.handle}] data region truncated; trailing bytes ignored`, NotificationType.Warning);
     }
     if (this.r2000Plus) xRecord.cloningFlags = this._objectReader.readBitShort() as DictionaryCloningFlags;
     const size = this._objectInitialPos + (this._size * 8) - 7;

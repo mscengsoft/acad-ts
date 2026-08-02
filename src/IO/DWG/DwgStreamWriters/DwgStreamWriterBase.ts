@@ -11,7 +11,12 @@ import { encodeCadString } from '../../TextEncoding.js';
 
 // Factory registration for breaking circular dependency
 type WriterFactory = new (stream: Uint8Array, encoding: string) => IDwgStreamWriter;
-type MergedWriterFactory = new (...args: unknown[]) => IDwgStreamWriter;
+type MergedWriterFactory = (
+	stream: Uint8Array,
+	main: IDwgStreamWriter,
+	text: IDwgStreamWriter,
+	handle: IDwgStreamWriter,
+) => IDwgStreamWriter;
 const _writerFactories: Map<string, WriterFactory> = new Map();
 const _mergedWriterFactories: Map<string, MergedWriterFactory> = new Map();
 
@@ -40,6 +45,12 @@ export abstract class DwgStreamWriterBase implements IDwgStreamWriter {
 	protected _view: DataView;
 	protected _position: number = 0;
 	private _lastByte: number = 0;
+
+	// Reusable scratch storage to avoid allocating per numeric write.
+	private _scratchBytes: Uint8Array = new Uint8Array(8);
+	private _scratchView: DataView = new DataView(this._scratchBytes.buffer);
+	private _scratch2: Uint8Array = this._scratchBytes.subarray(0, 2);
+	private _scratch4: Uint8Array = this._scratchBytes.subarray(0, 4);
 
 	constructor(stream: Uint8Array, encoding: string) {
 		this._buffer = stream;
@@ -142,26 +153,22 @@ export abstract class DwgStreamWriterBase implements IDwgStreamWriter {
 			throw new Error(`Merged writer factory for ${mergedKey} not registered. Import DwgStreamWriterFactory first.`);
 		}
 
-		if (mergedKey === 'MergedAC14') {
-			return new MergedFactory(
-				stream,
-				new WriterFactory(stream, encoding),
-				new WriterFactory(new Uint8Array(0), encoding));
-		} else {
-			return new MergedFactory(
-				stream,
-				new WriterFactory(stream, encoding),
-				new WriterFactory(new Uint8Array(0), encoding),
-				new WriterFactory(new Uint8Array(0), encoding));
-		}
+		return MergedFactory(
+			stream,
+			new WriterFactory(stream, encoding),
+			new WriterFactory(new Uint8Array(0), encoding),
+			new WriterFactory(new Uint8Array(0), encoding));
 	}
 
 	writeInt(value: number): void {
-		this._ensureCapacity(4);
-		const bytes = new Uint8Array(4);
-		const view = new DataView(bytes.buffer);
-		view.setInt32(0, value, true);
-		this.writeBytes(bytes);
+		if (this.bitShift === 0) {
+			this._ensureCapacity(4);
+			this._view.setInt32(this._position, value, true);
+			this._position += 4;
+			return;
+		}
+		this._scratchView.setInt32(0, value, true);
+		this.writeBytes(this._scratch4);
 	}
 
 	writeObjectType(value: number): void {
@@ -173,10 +180,14 @@ export abstract class DwgStreamWriterBase implements IDwgStreamWriter {
 	}
 
 	writeRawLong(value: number): void {
-		const bytes = new Uint8Array(4);
-		const view = new DataView(bytes.buffer);
-		view.setInt32(0, value, true);
-		this.writeBytes(bytes);
+		if (this.bitShift === 0) {
+			this._ensureCapacity(4);
+			this._view.setInt32(this._position, value, true);
+			this._position += 4;
+			return;
+		}
+		this._scratchView.setInt32(0, value, true);
+		this.writeBytes(this._scratch4);
 	}
 
 	writeBytes(arr: Uint8Array): void {
@@ -188,12 +199,19 @@ export abstract class DwgStreamWriterBase implements IDwgStreamWriter {
 			return;
 		}
 
-		const num = 8 - this.bitShift;
+		const bitShift = this.bitShift;
+		const num = 8 - bitShift;
 		this._ensureCapacity(arr.length + 1);
-		for (const b of arr) {
-			this._buffer[this._position++] = (this._lastByte | (b >>> this.bitShift)) & 0xFF;
-			this._lastByte = (b << num) & 0xFF;
+		const buffer = this._buffer;
+		let position = this._position;
+		let lastByte = this._lastByte;
+		for (let i = 0; i < arr.length; i++) {
+			const b = arr[i];
+			buffer[position++] = (lastByte | (b >>> bitShift)) & 0xFF;
+			lastByte = (b << num) & 0xFF;
 		}
+		this._position = position;
+		this._lastByte = lastByte;
 	}
 
 	writeBytesOffset(arr: Uint8Array, initialIndex: number, length: number): void {
@@ -205,13 +223,19 @@ export abstract class DwgStreamWriterBase implements IDwgStreamWriter {
 			return;
 		}
 
-		const num = 8 - this.bitShift;
+		const bitShift = this.bitShift;
+		const num = 8 - bitShift;
 		this._ensureCapacity(length + 1);
+		const buffer = this._buffer;
+		let position = this._position;
+		let lastByte = this._lastByte;
 		for (let i = 0, j = initialIndex; i < length; i++, j++) {
 			const b = arr[j];
-			this._buffer[this._position++] = (this._lastByte | (b >>> this.bitShift)) & 0xFF;
-			this._lastByte = (b << num) & 0xFF;
+			buffer[position++] = (lastByte | (b >>> bitShift)) & 0xFF;
+			lastByte = (b << num) & 0xFF;
 		}
+		this._position = position;
+		this._lastByte = lastByte;
 	}
 
 	writeBitShort(value: number): void {
@@ -241,10 +265,14 @@ export abstract class DwgStreamWriterBase implements IDwgStreamWriter {
 		}
 
 		this.write2Bits(0);
-		const bytes = new Uint8Array(8);
-		const view = new DataView(bytes.buffer);
-		view.setFloat64(0, value, true);
-		this.writeBytes(bytes);
+		if (this.bitShift === 0) {
+			this._ensureCapacity(8);
+			this._view.setFloat64(this._position, value, true);
+			this._position += 8;
+			return;
+		}
+		this._scratchView.setFloat64(0, value, true);
+		this.writeBytes(this._scratchBytes);
 	}
 
 	writeBitLong(value: number): void {
@@ -417,17 +445,25 @@ export abstract class DwgStreamWriterBase implements IDwgStreamWriter {
 	}
 
 	writeRawShort(value: number): void {
-		const bytes = new Uint8Array(2);
-		const view = new DataView(bytes.buffer);
-		view.setInt16(0, value, true);
-		this.writeBytes(bytes);
+		if (this.bitShift === 0) {
+			this._ensureCapacity(2);
+			this._view.setInt16(this._position, value, true);
+			this._position += 2;
+			return;
+		}
+		this._scratchView.setInt16(0, value, true);
+		this.writeBytes(this._scratch2);
 	}
 
 	writeRawDouble(value: number): void {
-		const bytes = new Uint8Array(8);
-		const view = new DataView(bytes.buffer);
-		view.setFloat64(0, value, true);
-		this.writeBytes(bytes);
+		if (this.bitShift === 0) {
+			this._ensureCapacity(8);
+			this._view.setFloat64(this._position, value, true);
+			this._position += 8;
+			return;
+		}
+		this._scratchView.setFloat64(0, value, true);
+		this.writeBytes(this._scratchBytes);
 	}
 
 	handleReference(cadObject: IHandledCadObject | number): void {
@@ -650,7 +686,8 @@ export abstract class DwgStreamWriterBase implements IDwgStreamWriter {
 	private _ensureCapacity(additionalBytes: number): void {
 		const needed = this._position + additionalBytes;
 		if (needed > this._buffer.length) {
-			const newSize = Math.max(needed, this._buffer.length * 2);
+			// 8 KiB floor keeps tiny seed buffers from reallocating dozens of times.
+			const newSize = Math.max(needed, this._buffer.length * 2, 0x2000);
 			const newBuffer = new Uint8Array(newSize);
 			newBuffer.set(this._buffer);
 			this._buffer = newBuffer;

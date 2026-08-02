@@ -1,159 +1,156 @@
 type CopyDelegate = (src: Uint8Array, srcIndex: number, dst: Uint8Array, dstIndex: number) => void;
 
 export class DwgLZ77AC21Decompressor {
-	private static _m_sourceOffset: number = 0;
-	private static _m_length: number = 0;
-	private static _m_sourceIndex: number = 0;
-	private static _m_opCode: number = 0;
-
 	public static decompress(source: Uint8Array, initialOffset: number, length: number, buffer: Uint8Array): void {
-		DwgLZ77AC21Decompressor._m_sourceOffset = 0;
-		DwgLZ77AC21Decompressor._m_length = 0;
-		DwgLZ77AC21Decompressor._m_sourceIndex = initialOffset;
-		DwgLZ77AC21Decompressor._m_opCode = source[DwgLZ77AC21Decompressor._m_sourceIndex];
+		if (!Number.isSafeInteger(initialOffset) || !Number.isSafeInteger(length) ||
+			initialOffset < 0 || length < 0 || initialOffset + length > source.length) {
+			throw new RangeError('Invalid LZ77AC21 source range.');
+		}
+		if (length === 0) return;
 
+		// Decoder state kept in locals (was static _m_* fields) so V8 can register-allocate it.
+		let sourceIndex: number = initialOffset;
+		let opCode: number = source[sourceIndex];
+		let runLength: number = 0;
+		let sourceOffset: number = 0;
 		let destIndex: number = 0;
-		const endIndex: number = DwgLZ77AC21Decompressor._m_sourceIndex + length;
+		const endIndex: number = sourceIndex + length;
 
-		++DwgLZ77AC21Decompressor._m_sourceIndex;
+		++sourceIndex;
 
-		if (DwgLZ77AC21Decompressor._m_sourceIndex >= endIndex) {
+		if (sourceIndex >= endIndex) {
 			return;
 		}
 
-		if ((DwgLZ77AC21Decompressor._m_opCode & 240) === 32) {
-			DwgLZ77AC21Decompressor._m_sourceIndex += 3;
-			DwgLZ77AC21Decompressor._m_length = source[DwgLZ77AC21Decompressor._m_sourceIndex - 1];
-			DwgLZ77AC21Decompressor._m_length &= 7;
+		if ((opCode & 240) === 32) {
+			sourceIndex += 3;
+			runLength = source[sourceIndex - 1] & 7;
 		}
 
-		while (DwgLZ77AC21Decompressor._m_sourceIndex < endIndex) {
-			destIndex = DwgLZ77AC21Decompressor._nextIndex(source, buffer, destIndex);
+		while (sourceIndex < endIndex) {
+			// Literal run (inlined _nextIndex/_readLiteralLength)
+			if (runLength === 0) {
+				runLength = opCode + 8;
+				if (runLength === 0x17) {
+					let n: number = source[sourceIndex];
+					++sourceIndex;
+					runLength += n;
 
-			if (DwgLZ77AC21Decompressor._m_sourceIndex >= endIndex) {
-				break;
-			}
-
-			destIndex = DwgLZ77AC21Decompressor._copyDecompressedChunks(source, endIndex, buffer, destIndex);
-		}
-	}
-
-	private static _nextIndex(source: Uint8Array, dest: Uint8Array, index: number): number {
-		if (DwgLZ77AC21Decompressor._m_length === 0) {
-			DwgLZ77AC21Decompressor._readLiteralLength(source);
-		}
-
-		DwgLZ77AC21Decompressor._copyRaw(source, DwgLZ77AC21Decompressor._m_sourceIndex, dest, index, DwgLZ77AC21Decompressor._m_length);
-
-		DwgLZ77AC21Decompressor._m_sourceIndex += DwgLZ77AC21Decompressor._m_length;
-		index += DwgLZ77AC21Decompressor._m_length;
-		return index;
-	}
-
-	private static _copyDecompressedChunks(src: Uint8Array, endIndex: number, dst: Uint8Array, destIndex: number): number {
-		DwgLZ77AC21Decompressor._m_length = 0;
-		DwgLZ77AC21Decompressor._m_opCode = src[DwgLZ77AC21Decompressor._m_sourceIndex];
-		++DwgLZ77AC21Decompressor._m_sourceIndex;
-
-		DwgLZ77AC21Decompressor._readInstructions(src);
-
-		while (true) {
-			DwgLZ77AC21Decompressor._copyBytes(dst, destIndex, DwgLZ77AC21Decompressor._m_length, DwgLZ77AC21Decompressor._m_sourceOffset);
-
-			destIndex += DwgLZ77AC21Decompressor._m_length;
-
-			DwgLZ77AC21Decompressor._m_length = DwgLZ77AC21Decompressor._m_opCode & 0x07;
-
-			if (DwgLZ77AC21Decompressor._m_length !== 0 || DwgLZ77AC21Decompressor._m_sourceIndex >= endIndex) {
-				break;
-			}
-
-			DwgLZ77AC21Decompressor._m_opCode = src[DwgLZ77AC21Decompressor._m_sourceIndex];
-			++DwgLZ77AC21Decompressor._m_sourceIndex;
-
-			if (DwgLZ77AC21Decompressor._m_opCode >> 4 === 0) {
-				break;
-			}
-
-			if (DwgLZ77AC21Decompressor._m_opCode >> 4 === 15) {
-				DwgLZ77AC21Decompressor._m_opCode &= 15;
-			}
-
-			DwgLZ77AC21Decompressor._readInstructions(src);
-		}
-		return destIndex;
-	}
-
-	private static _readInstructions(buffer: Uint8Array): void {
-		switch (DwgLZ77AC21Decompressor._m_opCode >> 4) {
-			case 0:
-				DwgLZ77AC21Decompressor._m_length = (DwgLZ77AC21Decompressor._m_opCode & 0xF) + 0x13;
-				DwgLZ77AC21Decompressor._m_sourceOffset = buffer[DwgLZ77AC21Decompressor._m_sourceIndex];
-				++DwgLZ77AC21Decompressor._m_sourceIndex;
-				DwgLZ77AC21Decompressor._m_opCode = buffer[DwgLZ77AC21Decompressor._m_sourceIndex];
-				++DwgLZ77AC21Decompressor._m_sourceIndex;
-				DwgLZ77AC21Decompressor._m_length = (DwgLZ77AC21Decompressor._m_opCode >> 3 & 0x10) + DwgLZ77AC21Decompressor._m_length;
-				DwgLZ77AC21Decompressor._m_sourceOffset = ((DwgLZ77AC21Decompressor._m_opCode & 0x78) << 5) + 1 + DwgLZ77AC21Decompressor._m_sourceOffset;
-				break;
-			case 1:
-				DwgLZ77AC21Decompressor._m_length = (DwgLZ77AC21Decompressor._m_opCode & 0xF) + 3;
-				DwgLZ77AC21Decompressor._m_sourceOffset = buffer[DwgLZ77AC21Decompressor._m_sourceIndex];
-				++DwgLZ77AC21Decompressor._m_sourceIndex;
-				DwgLZ77AC21Decompressor._m_opCode = buffer[DwgLZ77AC21Decompressor._m_sourceIndex];
-				++DwgLZ77AC21Decompressor._m_sourceIndex;
-				DwgLZ77AC21Decompressor._m_sourceOffset = ((DwgLZ77AC21Decompressor._m_opCode & 248) << 5) + 1 + DwgLZ77AC21Decompressor._m_sourceOffset;
-				break;
-			case 2:
-				DwgLZ77AC21Decompressor._m_sourceOffset = buffer[DwgLZ77AC21Decompressor._m_sourceIndex];
-				++DwgLZ77AC21Decompressor._m_sourceIndex;
-				DwgLZ77AC21Decompressor._m_sourceOffset = ((buffer[DwgLZ77AC21Decompressor._m_sourceIndex] << 8) & 0xFF00) | DwgLZ77AC21Decompressor._m_sourceOffset;
-				++DwgLZ77AC21Decompressor._m_sourceIndex;
-				DwgLZ77AC21Decompressor._m_length = DwgLZ77AC21Decompressor._m_opCode & 7;
-				if ((DwgLZ77AC21Decompressor._m_opCode & 8) === 0) {
-					DwgLZ77AC21Decompressor._m_opCode = buffer[DwgLZ77AC21Decompressor._m_sourceIndex];
-					++DwgLZ77AC21Decompressor._m_sourceIndex;
-					DwgLZ77AC21Decompressor._m_length = (DwgLZ77AC21Decompressor._m_opCode & 0xF8) + DwgLZ77AC21Decompressor._m_length;
-				} else {
-					++DwgLZ77AC21Decompressor._m_sourceOffset;
-					DwgLZ77AC21Decompressor._m_length = ((buffer[DwgLZ77AC21Decompressor._m_sourceIndex] << 3) + DwgLZ77AC21Decompressor._m_length);
-					++DwgLZ77AC21Decompressor._m_sourceIndex;
-					DwgLZ77AC21Decompressor._m_opCode = buffer[DwgLZ77AC21Decompressor._m_sourceIndex];
-					++DwgLZ77AC21Decompressor._m_sourceIndex;
-					DwgLZ77AC21Decompressor._m_length = ((DwgLZ77AC21Decompressor._m_opCode & 0xF8) << 8) + DwgLZ77AC21Decompressor._m_length + 0x100;
+					if (n === 0xFF) {
+						do {
+							n = source[sourceIndex];
+							++sourceIndex;
+							n |= source[sourceIndex] << 8;
+							++sourceIndex;
+							runLength += n;
+						} while (n === 0xFFFF);
+					}
 				}
-				break;
-			default:
-				DwgLZ77AC21Decompressor._m_length = DwgLZ77AC21Decompressor._m_opCode >> 4;
-				DwgLZ77AC21Decompressor._m_sourceOffset = DwgLZ77AC21Decompressor._m_opCode & 15;
-				DwgLZ77AC21Decompressor._m_opCode = buffer[DwgLZ77AC21Decompressor._m_sourceIndex];
-				++DwgLZ77AC21Decompressor._m_sourceIndex;
-				DwgLZ77AC21Decompressor._m_sourceOffset = ((DwgLZ77AC21Decompressor._m_opCode & 0xF8) << 1) + DwgLZ77AC21Decompressor._m_sourceOffset + 1;
-				break;
-		}
-	}
+			}
 
-	private static _readLiteralLength(buffer: Uint8Array): void {
-		DwgLZ77AC21Decompressor._m_length = DwgLZ77AC21Decompressor._m_opCode + 8;
-		if (DwgLZ77AC21Decompressor._m_length === 0x17) {
-			let n: number = buffer[DwgLZ77AC21Decompressor._m_sourceIndex];
-			++DwgLZ77AC21Decompressor._m_sourceIndex;
-			DwgLZ77AC21Decompressor._m_length += n;
+			DwgLZ77AC21Decompressor._copyRaw(source, sourceIndex, buffer, destIndex, runLength);
+			sourceIndex += runLength;
+			destIndex += runLength;
 
-			if (n === 0xFF) {
-				do {
-					n = buffer[DwgLZ77AC21Decompressor._m_sourceIndex];
-					++DwgLZ77AC21Decompressor._m_sourceIndex;
-					n |= buffer[DwgLZ77AC21Decompressor._m_sourceIndex] << 8;
-					++DwgLZ77AC21Decompressor._m_sourceIndex;
-					DwgLZ77AC21Decompressor._m_length += n;
-				} while (n === 0xFFFF);
+			if (sourceIndex >= endIndex) {
+				break;
+			}
+
+			// Back-reference chunks (inlined _copyDecompressedChunks/_readInstructions)
+			runLength = 0;
+			opCode = source[sourceIndex];
+			++sourceIndex;
+
+			while (true) {
+				switch (opCode >> 4) {
+					case 0:
+						runLength = (opCode & 0xF) + 0x13;
+						sourceOffset = source[sourceIndex];
+						++sourceIndex;
+						opCode = source[sourceIndex];
+						++sourceIndex;
+						runLength = (opCode >> 3 & 0x10) + runLength;
+						sourceOffset = ((opCode & 0x78) << 5) + 1 + sourceOffset;
+						break;
+					case 1:
+						runLength = (opCode & 0xF) + 3;
+						sourceOffset = source[sourceIndex];
+						++sourceIndex;
+						opCode = source[sourceIndex];
+						++sourceIndex;
+						sourceOffset = ((opCode & 248) << 5) + 1 + sourceOffset;
+						break;
+					case 2:
+						sourceOffset = source[sourceIndex];
+						++sourceIndex;
+						sourceOffset = ((source[sourceIndex] << 8) & 0xFF00) | sourceOffset;
+						++sourceIndex;
+						runLength = opCode & 7;
+						if ((opCode & 8) === 0) {
+							opCode = source[sourceIndex];
+							++sourceIndex;
+							runLength = (opCode & 0xF8) + runLength;
+						} else {
+							++sourceOffset;
+							runLength = ((source[sourceIndex] << 3) + runLength);
+							++sourceIndex;
+							opCode = source[sourceIndex];
+							++sourceIndex;
+							runLength = ((opCode & 0xF8) << 8) + runLength + 0x100;
+						}
+						break;
+					default:
+						runLength = opCode >> 4;
+						sourceOffset = opCode & 15;
+						opCode = source[sourceIndex];
+						++sourceIndex;
+						sourceOffset = ((opCode & 0xF8) << 1) + sourceOffset + 1;
+						break;
+				}
+
+				DwgLZ77AC21Decompressor._copyBytes(buffer, destIndex, runLength, sourceOffset);
+
+				destIndex += runLength;
+
+				runLength = opCode & 0x07;
+
+				if (runLength !== 0 || sourceIndex >= endIndex) {
+					break;
+				}
+
+				opCode = source[sourceIndex];
+				++sourceIndex;
+
+				if (opCode >> 4 === 0) {
+					break;
+				}
+
+				if (opCode >> 4 === 15) {
+					opCode &= 15;
+				}
 			}
 		}
 	}
 
 	private static _copyBytes(dst: Uint8Array, dstIndex: number, length: number, srcOffset: number): void {
+		if (length === 0) {
+			// Degenerate instructions encode a zero-length match; treat as no-op
+			// like the pre-hardening decoder instead of rejecting the stream.
+			return;
+		}
 		let initialIndex: number = dstIndex - srcOffset;
+		if (!Number.isSafeInteger(length) || length < 0 || srcOffset <= 0 || initialIndex < 0 ||
+			dstIndex < 0 || dstIndex + length > dst.length) {
+			throw new RangeError('Invalid LZ77AC21 back-reference.');
+		}
 		const maxIndex: number = initialIndex + length;
+
+		if (length > 16 && srcOffset >= length) {
+			// Distance >= length: ranges cannot overlap, so a bulk move is byte-identical
+			// to the forward byte copy required for self-referencing back-references.
+			dst.copyWithin(dstIndex, initialIndex, maxIndex);
+			return;
+		}
 
 		while (initialIndex < maxIndex) {
 			dst[dstIndex++] = dst[initialIndex++];
@@ -161,15 +158,44 @@ export class DwgLZ77AC21Decompressor {
 	}
 
 	private static _copyRaw(src: Uint8Array, srcIndex: number, dst: Uint8Array, dstIndex: number, length: number): void {
+		if (!Number.isSafeInteger(length) || length < 0 || srcIndex < 0 || dstIndex < 0 ||
+			srcIndex + length > src.length || dstIndex + length > dst.length) {
+			throw new RangeError('Invalid LZ77AC21 literal run.');
+		}
 		for (; length >= 32; length -= 32) {
-			DwgLZ77AC21Decompressor._copy4b(src, srcIndex + 24, dst, dstIndex);
-			DwgLZ77AC21Decompressor._copy4b(src, srcIndex + 28, dst, dstIndex + 4);
-			DwgLZ77AC21Decompressor._copy4b(src, srcIndex + 16, dst, dstIndex + 8);
-			DwgLZ77AC21Decompressor._copy4b(src, srcIndex + 20, dst, dstIndex + 12);
-			DwgLZ77AC21Decompressor._copy4b(src, srcIndex + 8, dst, dstIndex + 16);
-			DwgLZ77AC21Decompressor._copy4b(src, srcIndex + 12, dst, dstIndex + 20);
-			DwgLZ77AC21Decompressor._copy4b(src, srcIndex, dst, dstIndex + 24);
-			DwgLZ77AC21Decompressor._copy4b(src, srcIndex + 4, dst, dstIndex + 28);
+			// Inlined scrambled block copy (4-byte groups in order 24,28,16,20,8,12,0,4)
+			dst[dstIndex] = src[srcIndex + 24];
+			dst[dstIndex + 1] = src[srcIndex + 25];
+			dst[dstIndex + 2] = src[srcIndex + 26];
+			dst[dstIndex + 3] = src[srcIndex + 27];
+			dst[dstIndex + 4] = src[srcIndex + 28];
+			dst[dstIndex + 5] = src[srcIndex + 29];
+			dst[dstIndex + 6] = src[srcIndex + 30];
+			dst[dstIndex + 7] = src[srcIndex + 31];
+			dst[dstIndex + 8] = src[srcIndex + 16];
+			dst[dstIndex + 9] = src[srcIndex + 17];
+			dst[dstIndex + 10] = src[srcIndex + 18];
+			dst[dstIndex + 11] = src[srcIndex + 19];
+			dst[dstIndex + 12] = src[srcIndex + 20];
+			dst[dstIndex + 13] = src[srcIndex + 21];
+			dst[dstIndex + 14] = src[srcIndex + 22];
+			dst[dstIndex + 15] = src[srcIndex + 23];
+			dst[dstIndex + 16] = src[srcIndex + 8];
+			dst[dstIndex + 17] = src[srcIndex + 9];
+			dst[dstIndex + 18] = src[srcIndex + 10];
+			dst[dstIndex + 19] = src[srcIndex + 11];
+			dst[dstIndex + 20] = src[srcIndex + 12];
+			dst[dstIndex + 21] = src[srcIndex + 13];
+			dst[dstIndex + 22] = src[srcIndex + 14];
+			dst[dstIndex + 23] = src[srcIndex + 15];
+			dst[dstIndex + 24] = src[srcIndex];
+			dst[dstIndex + 25] = src[srcIndex + 1];
+			dst[dstIndex + 26] = src[srcIndex + 2];
+			dst[dstIndex + 27] = src[srcIndex + 3];
+			dst[dstIndex + 28] = src[srcIndex + 4];
+			dst[dstIndex + 29] = src[srcIndex + 5];
+			dst[dstIndex + 30] = src[srcIndex + 6];
+			dst[dstIndex + 31] = src[srcIndex + 7];
 
 			srcIndex += 32;
 			dstIndex += 32;

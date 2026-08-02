@@ -1,11 +1,17 @@
 export class DwgLZ77AC18Decompressor {
 	public static decompress(compressed: Uint8Array, compressedOffset: number, decompressedSize: number): Uint8Array {
+		if (!Number.isSafeInteger(decompressedSize) || decompressedSize < 0) {
+			throw new RangeError(`Invalid LZ77AC18 decompressed size: ${decompressedSize}.`);
+		}
 		const result = new Uint8Array(decompressedSize);
 		DwgLZ77AC18Decompressor.decompressToDest(compressed, compressedOffset, result);
 		return result;
 	}
 
 	public static decompressToDest(src: Uint8Array, srcOffset: number, dst: Uint8Array): void {
+		if (!Number.isSafeInteger(srcOffset) || srcOffset < 0 || srcOffset > src.length) {
+			throw new RangeError(`Invalid LZ77AC18 source offset: ${srcOffset}.`);
+		}
 		let srcPos = srcOffset;
 		let dstPos = 0;
 		let tempBuf = new Uint8Array(128);
@@ -121,9 +127,11 @@ export class DwgLZ77AC18Decompressor {
 		let lowbits = code & 0b1111;
 		if (lowbits === 0) {
 			let lastByte: number;
+			if (ref.pos >= src.length) throw new RangeError('Truncated LZ77AC18 literal length.');
 			lastByte = src[ref.pos++];
 			while (lastByte === 0) {
 				lowbits += 0xFF;
+				if (ref.pos >= src.length) throw new RangeError('Truncated LZ77AC18 literal length.');
 				lastByte = src[ref.pos++];
 			}
 			lowbits += 0xF + lastByte;
@@ -138,9 +146,11 @@ export class DwgLZ77AC18Decompressor {
 		let compressedBytes = opcode1 & validBits;
 		if (compressedBytes === 0) {
 			let lastByte: number;
+			if (ref.pos >= compressed.length) throw new RangeError('Truncated LZ77AC18 match length.');
 			lastByte = compressed[ref.pos++];
 			while (lastByte === 0) {
 				compressedBytes += 0xFF;
+				if (ref.pos >= compressed.length) throw new RangeError('Truncated LZ77AC18 match length.');
 				lastByte = compressed[ref.pos++];
 			}
 			compressedBytes += lastByte + validBits;
@@ -151,6 +161,9 @@ export class DwgLZ77AC18Decompressor {
 	private static _twoByteOffset(
 		offset: number, addedValue: number, stream: Uint8Array, srcPos: number
 	): { offset: number; firstByte: number; srcPos: number } {
+		if (srcPos < 0 || srcPos + 2 > stream.length) {
+			throw new RangeError('Truncated LZ77AC18 match offset.');
+		}
 		const firstByte = stream[srcPos++];
 		offset |= firstByte >> 2;
 		offset |= stream[srcPos++] << 6;

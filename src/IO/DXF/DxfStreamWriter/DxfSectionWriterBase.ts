@@ -858,9 +858,15 @@ export abstract class DxfSectionWriterBase {
     this._writer.write(90, mtext.backgroundFillFlags, subclass);
 
     if (mtext.backgroundFillFlags > 0) {
-      this._writer.write(63, mtext.backgroundColor.index);
+      // backgroundColor can legitimately be null on round-tripped documents
+      // (e.g. fill flags set without an explicit color); skip the color pair.
+      if (mtext.backgroundColor != null) {
+        this._writer.write(63, mtext.backgroundColor.index);
+      }
       this._writer.write(45, mtext.backgroundScale, subclass);
-      this._writer.writeTrueColor(420, mtext.backgroundColor);
+      if (mtext.backgroundColor != null) {
+        this._writer.writeTrueColor(420, mtext.backgroundColor);
+      }
       this._writer.write(441, mtext.backgroundTransparency);
     }
   }

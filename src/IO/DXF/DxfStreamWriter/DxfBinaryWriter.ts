@@ -1,6 +1,6 @@
 import { DxfStreamWriterBase } from './DxfStreamWriterBase.js';
 import { GroupCodeValue, GroupCodeValueType } from '../../../GroupCodeValue.js';
-import { encodeCadString } from '../../TextEncoding.js';
+import { encodeCadString, getDecoderEncodingLabel } from '../../TextEncoding.js';
 
 export class DxfBinaryWriter extends DxfStreamWriterBase {
   public static readonly sentinelBytes: Uint8Array = new Uint8Array([
@@ -13,12 +13,15 @@ export class DxfBinaryWriter extends DxfStreamWriterBase {
   private _buffer: Uint8Array;
   private _position: number = 0;
   private readonly _encoding: string;
+  private readonly _asciiIsSingleByte: boolean;
   private _stream: { write(data: Uint8Array): void; flush?(): void; close?(): void };
 
   public constructor(stream: { write(data: Uint8Array): void; flush?(): void; close?(): void }, encoding: string) {
     super();
     this._stream = stream;
     this._encoding = encoding;
+    // Every supported encoding except UTF-16LE maps ASCII characters to single bytes.
+    this._asciiIsSingleByte = getDecoderEncodingLabel(encoding) !== 'utf-16le';
     this._buffer = new Uint8Array(65536);
     this._writer = new DataView(this._buffer.buffer);
 
@@ -58,6 +61,9 @@ export class DxfBinaryWriter extends DxfStreamWriterBase {
       case GroupCodeValueType.Comment:
       case GroupCodeValueType.ExtendedDataString: {
         const str = `${value}`;
+        if (this._asciiIsSingleByte && this._writeAsciiDirect(str)) {
+          break;
+        }
         const encoded = encodeCadString(str, this._encoding);
         this._ensureCapacity(encoded.length + 1);
         this._buffer.set(encoded, this._position);
@@ -98,11 +104,12 @@ export class DxfBinaryWriter extends DxfStreamWriterBase {
       case GroupCodeValueType.Handle:
       case GroupCodeValueType.ObjectId:
       case GroupCodeValueType.ExtendedDataHandle: {
+        // Hex strings are pure ASCII; write them without an intermediate encode.
         const hexStr = (value as number).toString(16).toUpperCase();
-        const hexEncoded = new TextEncoder().encode(hexStr);
-        this._ensureCapacity(hexEncoded.length + 1);
-        this._buffer.set(hexEncoded, this._position);
-        this._position += hexEncoded.length;
+        this._ensureCapacity(hexStr.length + 1);
+        for (let i = 0; i < hexStr.length; i++) {
+          this._buffer[this._position++] = hexStr.charCodeAt(i);
+        }
         this._buffer[this._position++] = 0; // null terminator
         break;
       }
@@ -121,6 +128,9 @@ export class DxfBinaryWriter extends DxfStreamWriterBase {
       }
       default: {
         const defaultStr = `${value}`;
+        if (this._writeAsciiDirect(defaultStr)) {
+          break;
+        }
         const defaultEncoded = new TextEncoder().encode(defaultStr);
         this._ensureCapacity(defaultEncoded.length + 1);
         this._buffer.set(defaultEncoded, this._position);
@@ -129,6 +139,21 @@ export class DxfBinaryWriter extends DxfStreamWriterBase {
         break;
       }
     }
+  }
+
+  /** Writes a null-terminated string directly if it is pure ASCII; returns false otherwise. */
+  private _writeAsciiDirect(str: string): boolean {
+    for (let i = 0; i < str.length; i++) {
+      if (str.charCodeAt(i) >= 0x80) {
+        return false;
+      }
+    }
+    this._ensureCapacity(str.length + 1);
+    for (let i = 0; i < str.length; i++) {
+      this._buffer[this._position++] = str.charCodeAt(i);
+    }
+    this._buffer[this._position++] = 0; // null terminator
+    return true;
   }
 
   private _ensureCapacity(needed: number): void {

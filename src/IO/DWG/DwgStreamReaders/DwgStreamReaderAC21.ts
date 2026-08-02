@@ -12,7 +12,10 @@ export class DwgStreamReaderAC21 extends DwgStreamReaderAC18 {
 			value = '';
 		} else {
 			const length: number = (textLength << 1) & 0xFFFF;
-			value = this.readStringEncoded(length, 'utf-16le').replace(/\0/g, '');
+			value = this.readStringEncoded(length, 'utf-16le');
+			if (value.indexOf('\0') >= 0) {
+				value = value.replace(/\0/g, '');
+			}
 		}
 		return value;
 	}
@@ -24,7 +27,10 @@ export class DwgStreamReaderAC21 extends DwgStreamReaderAC18 {
 			value = '';
 		} else {
 			const length: number = (textLength << 1) & 0xFFFF;
-			value = this.readStringEncoded(length, 'utf-16le').replace(/\0/g, '');
+			value = this.readStringEncoded(length, 'utf-16le');
+			if (value.indexOf('\0') >= 0) {
+				value = value.replace(/\0/g, '');
+			}
 		}
 		return value;
 	}

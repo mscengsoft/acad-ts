@@ -163,6 +163,70 @@ import { GroupCodeValueType } from '../../../GroupCodeValueType.js';
 import { AnnotScaleObjectContextData } from '../../../Objects/AnnotScaleObjectContextData.js';
 import { encodeCadString, encodeUtf16Le } from '../../TextEncoding.js';
 
+/** Growable little-endian byte accumulator for XRecord/XData chunk data. */
+class ChunkBuffer {
+	private _bytes: Uint8Array = new Uint8Array(256);
+	private _length: number = 0;
+	private _scratch: DataView = new DataView(new ArrayBuffer(8));
+
+	get length(): number { return this._length; }
+
+	get view(): Uint8Array { return this._bytes.subarray(0, this._length); }
+
+	reset(): void { this._length = 0; }
+
+	pushByte(value: number): void {
+		this._ensure(1);
+		this._bytes[this._length++] = value & 0xFF;
+	}
+
+	pushInt16LE(value: number): void {
+		this._ensure(2);
+		this._bytes[this._length++] = value & 0xFF;
+		this._bytes[this._length++] = (value >> 8) & 0xFF;
+	}
+
+	pushInt32LE(value: number): void {
+		this._ensure(4);
+		this._bytes[this._length++] = value & 0xFF;
+		this._bytes[this._length++] = (value >> 8) & 0xFF;
+		this._bytes[this._length++] = (value >> 16) & 0xFF;
+		this._bytes[this._length++] = (value >> 24) & 0xFF;
+	}
+
+	pushInt64LE(v: number | bigint): void {
+		let value = typeof v === 'bigint' ? v : BigInt(Math.trunc(v));
+		value = BigInt.asUintN(64, value);
+		this._ensure(8);
+		for (let i = 0; i < 8; i++) {
+			this._bytes[this._length++] = Number(value & 0xFFn);
+			value >>= 8n;
+		}
+	}
+
+	pushFloat64LE(value: number): void {
+		this._scratch.setFloat64(0, value, true);
+		this._ensure(8);
+		for (let i = 0; i < 8; i++) {
+			this._bytes[this._length++] = this._scratch.getUint8(i);
+		}
+	}
+
+	pushBytes(bytes: Uint8Array): void {
+		this._ensure(bytes.length);
+		this._bytes.set(bytes, this._length);
+		this._length += bytes.length;
+	}
+
+	private _ensure(extra: number): void {
+		if (this._length + extra > this._bytes.length) {
+			const grown = new Uint8Array(Math.max(this._bytes.length * 2, this._length + extra));
+			grown.set(this._bytes.subarray(0, this._length));
+			this._bytes = grown;
+		}
+	}
+}
+
 export class DwgObjectWriter extends DwgSectionIO {
 	override get sectionName(): string { return DwgSectionDefinition.acDbObjects; }
 
@@ -212,11 +276,11 @@ export class DwgObjectWriter extends DwgSectionIO {
 
 	get bytesWritten(): number { return this._streamPos; }
 
-	getWrittenData(): Uint8Array { return this._stream.slice(0, this._streamPos); }
+	getWrittenData(): Uint8Array { return this._stream.subarray(0, this._streamPos); }
 
 	private _ensureStreamCapacity(needed: number): void {
 		if (needed > this._stream.length) {
-			const newSize = Math.max(needed, this._stream.length * 2);
+			const newSize = Math.max(needed, this._stream.length * 2, 0x10000);
 			const newStream = new Uint8Array(newSize);
 			newStream.set(this._stream.subarray(0, this._streamPos));
 			this._stream = newStream;
@@ -1067,23 +1131,51 @@ export class DwgObjectWriter extends DwgSectionIO {
 		this._ensureStreamCapacity(this._streamPos + this._msmainPos + 64);
 
 		const position = this._streamPos;
-		const crc = new CRC8StreamHandler(this._stream.subarray(this._streamPos), 0xC0C1);
+		const stream = this._stream;
+		let pos = position;
 
 		const size = this._msmainPos;
 		const sizeb = (this._msmainPos << 3) - this._writer.savedPositionInBits;
-		this._writeSize(crc, size);
 
-		if (this.r2010Plus) {
-			this._writeSizeInBits(crc, sizeb);
+		// MS size prefix
+		if (size >= 0b1000000000000000) {
+			stream[pos++] = size & 0xFF;
+			stream[pos++] = ((size >> 8) & 0x7F) | 0x80;
+			stream[pos++] = (size >> 15) & 0xFF;
+			stream[pos++] = (size >> 23) & 0xFF;
+		} else {
+			stream[pos++] = size & 0xFF;
+			stream[pos++] = (size >> 8) & 0xFF;
 		}
 
-		crc.write(new Uint8Array(this._writer.main.stream).subarray(0, this._msmainPos), 0, this._msmainPos);
+		if (this.r2010Plus) {
+			// MC size in bits
+			if (sizeb === 0) {
+				stream[pos++] = 0;
+			} else {
+				let s = sizeb;
+				let shift = s >>> 7;
+				while (s !== 0) {
+					let b = s & 0x7F;
+					if (shift !== 0) {
+						b = b | 0x80;
+					}
+					stream[pos++] = b;
+					s = shift;
+					shift = s >>> 7;
+				}
+			}
+		}
 
-		const seedBytes = new Uint8Array(2);
-		const seedView = new DataView(seedBytes.buffer);
-		seedView.setUint16(0, crc.seed, true);
-		this._stream.set(seedBytes, this._streamPos + crc.position);
-		this._streamPos += crc.position + 2;
+		// Object payload
+		stream.set(new Uint8Array(this._writer.main.stream, 0, this._msmainPos), pos);
+		pos += this._msmainPos;
+
+		// CRC over prefix + payload, then the seed appended little-endian
+		const crc = CRC8StreamHandler.getCRCValue(0xC0C1, stream, position, pos - position);
+		stream[pos++] = crc & 0xFF;
+		stream[pos++] = (crc >> 8) & 0xFF;
+		this._streamPos = pos;
 
 		this.map.set(cadObject.handle, position);
 	}
@@ -4106,8 +4198,11 @@ export class DwgObjectWriter extends DwgSectionIO {
 		this._write4x3Matrix(filter.insertTransform);
 	}
 
+	private _xrecordChunks: ChunkBuffer = new ChunkBuffer();
+
 	private _writeXRecord(xrecord: XRecord): void {
-		const chunks: number[] = [];
+		const chunks = this._xrecordChunks;
+		chunks.reset();
 		const getHandleValue = (value: unknown): number => {
 			if (typeof value === 'number') {
 				return value;
@@ -4120,25 +4215,6 @@ export class DwgObjectWriter extends DwgSectionIO {
 			}
 			return 0;
 		};
-		const pushInt16LE = (v: number) => {
-			chunks.push(v & 0xFF, (v >> 8) & 0xFF);
-		};
-		const pushInt32LE = (v: number) => {
-			chunks.push(v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF);
-		};
-		const pushInt64LE = (v: number | bigint) => {
-			let value = typeof v === 'bigint' ? v : BigInt(Math.trunc(v));
-			value = BigInt.asUintN(64, value);
-			for (let i = 0; i < 8; i++) {
-				chunks.push(Number((value >> BigInt(i * 8)) & 0xFFn));
-			}
-		};
-		const pushFloat64LE = (v: number) => {
-			const buf = new ArrayBuffer(8);
-			new DataView(buf).setFloat64(0, v, true);
-			const bytes = new Uint8Array(buf);
-			for (let i = 0; i < 8; i++) chunks.push(bytes[i]);
-		};
 
 		for (const entry of xrecord.entries) {
 			if (entry.value == null) continue;
@@ -4149,40 +4225,40 @@ export class DwgObjectWriter extends DwgSectionIO {
 				continue;
 			}
 
-			pushInt16LE(entry.code);
+			chunks.pushInt16LE(entry.code);
 
 			switch (groupValueType) {
 				case GroupCodeValueType.Byte:
 				case GroupCodeValueType.Bool:
-					chunks.push(Number(entry.value) & 0xFF);
+					chunks.pushByte(Number(entry.value));
 					break;
 				case GroupCodeValueType.Int16:
 				case GroupCodeValueType.ExtendedDataInt16:
-					pushInt16LE(Number(entry.value));
+					chunks.pushInt16LE(Number(entry.value));
 					break;
 				case GroupCodeValueType.Int32:
 				case GroupCodeValueType.ExtendedDataInt32:
-					pushInt32LE(Number(entry.value));
+					chunks.pushInt32LE(Number(entry.value));
 					break;
 				case GroupCodeValueType.Int64:
-					pushInt64LE(Number(entry.value));
+					chunks.pushInt64LE(Number(entry.value));
 					break;
 				case GroupCodeValueType.Double:
 				case GroupCodeValueType.ExtendedDataDouble:
-					pushFloat64LE(Number(entry.value));
+					chunks.pushFloat64LE(Number(entry.value));
 					break;
 				case GroupCodeValueType.Point3D: {
 					const xyz = entry.value as XYZ;
-					pushFloat64LE(xyz.x);
-					pushFloat64LE(xyz.y);
-					pushFloat64LE(xyz.z);
+					chunks.pushFloat64LE(xyz.x);
+					chunks.pushFloat64LE(xyz.y);
+					chunks.pushFloat64LE(xyz.z);
 					break;
 				}
 				case GroupCodeValueType.Chunk:
 				case GroupCodeValueType.ExtendedDataChunk: {
 					const arr = entry.value as Uint8Array;
-					chunks.push(arr.length & 0xFF);
-					for (let i = 0; i < arr.length; i++) chunks.push(arr[i]);
+					chunks.pushByte(arr.length);
+					chunks.pushBytes(arr);
 					break;
 				}
 				case GroupCodeValueType.Handle: {
@@ -4198,7 +4274,7 @@ export class DwgObjectWriter extends DwgSectionIO {
 				case GroupCodeValueType.ObjectId:
 				case GroupCodeValueType.ExtendedDataHandle: {
 					const handle = getHandleValue(entry.value);
-					pushInt64LE(handle);
+					chunks.pushInt64LE(handle);
 					break;
 				}
 				default:
@@ -4207,7 +4283,7 @@ export class DwgObjectWriter extends DwgSectionIO {
 		}
 
 		this._writer.writeBitLong(chunks.length);
-		this._writer.writeBytesOffset(new Uint8Array(chunks), 0, chunks.length);
+		this._writer.writeBytesOffset(chunks.view, 0, chunks.length);
 
 		if (this.r2000Plus) {
 			this._writer.writeBitShort(xrecord.cloningFlags);
@@ -4216,27 +4292,24 @@ export class DwgObjectWriter extends DwgSectionIO {
 
 	// ==================== Utility Methods ====================
 
-	private _writeStringInChunks(chunks: number[], text: string): void {
+	private _writeStringInChunks(chunks: ChunkBuffer, text: string): void {
 		if (this.r2007Plus) {
 			if (!text) {
-				chunks.push(0, 0);
+				chunks.pushInt16LE(0);
 				return;
 			}
-			const len = text.length;
-			chunks.push(len & 0xFF, (len >> 8) & 0xFF);
-			const bytes = this._encodeUtf16LE(text);
-			for (let i = 0; i < bytes.length; i++) chunks.push(bytes[i]);
+			chunks.pushInt16LE(text.length);
+			chunks.pushBytes(this._encodeUtf16LE(text));
 		} else if (!text) {
-			chunks.push(0, 0);
+			chunks.pushInt16LE(0);
 			const codeIndex = CadUtils.getCodeIndex(CadUtils.getCodePage(this._writer.encoding));
-			chunks.push(codeIndex);
+			chunks.pushByte(codeIndex);
 		} else {
 			const bytes = this._encodeText(text);
-			const len = bytes.length;
-			chunks.push(len & 0xFF, (len >> 8) & 0xFF);
+			chunks.pushInt16LE(bytes.length);
 			const codeIndex = CadUtils.getCodeIndex(CadUtils.getCodePage(this._writer.encoding));
-			chunks.push(codeIndex);
-			for (let i = 0; i < bytes.length; i++) chunks.push(bytes[i]);
+			chunks.pushByte(codeIndex);
+			chunks.pushBytes(bytes);
 		}
 	}
 

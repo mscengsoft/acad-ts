@@ -1,4 +1,4 @@
-import { DxfMapBase } from './DxfMapBase.js';
+import { DxfMapBase, lockDxfProperties } from './DxfMapBase.js';
 import { DxfProperty } from './DxfProperty.js';
 import { getClassMetadata } from './Metadata/MetadataStore.js';
 
@@ -11,17 +11,22 @@ export class DxfClassMap extends DxfMapBase {
 		super();
 		if (arg instanceof DxfClassMap) {
 			this.name = arg.name;
-			for (const [k, v] of arg.dxfProperties) {
-				this.dxfProperties.set(k, v);
-			}
+			// dxfProperties is never mutated after construction, so cloned class maps
+			// can share the cached Map instead of copying every property entry.
+			this.dxfProperties = arg.dxfProperties;
 		} else if (typeof arg === 'string') {
 			this.name = arg;
 		}
 	}
 
 	public static createFromType(typeName: string, name?: string): DxfClassMap {
-		if (DxfClassMap._cache.has(typeName)) {
-			return new DxfClassMap(DxfClassMap._cache.get(typeName)!);
+		// Class maps are read-only after construction (readers/writers only call
+		// dxfProperties.get/has/iterate) and their DxfProperty values are already
+		// shared by the previous shallow clones, so the cached instance can be
+		// returned directly instead of copying the property map on every call.
+		const cached = DxfClassMap._cache.get(typeName);
+		if (cached) {
+			return cached;
 		}
 
 		const classMap = new DxfClassMap();
@@ -38,8 +43,11 @@ export class DxfClassMap extends DxfMapBase {
 			DxfClassMap.addClassProperties(classMap, baseMetadata.typeName);
 		}
 
+		// The cached instance is shared by all future calls; lock it so any
+		// accidental mutation fails loudly instead of corrupting later reads.
+		lockDxfProperties(classMap);
 		DxfClassMap._cache.set(typeName, classMap);
-		return new DxfClassMap(classMap);
+		return classMap;
 	}
 
 	public static create(type: Function | string, name?: string): DxfClassMap {

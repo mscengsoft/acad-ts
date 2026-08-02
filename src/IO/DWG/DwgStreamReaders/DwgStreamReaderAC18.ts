@@ -41,8 +41,8 @@ export class DwgStreamReaderAC18 extends DwgStreamReaderAC15 {
 	}
 
 	public override readEnColor(): { color: Color; transparency: Transparency; flag: boolean } {
-		let color: Color = new Color(0);
-		let transparency: Transparency = Transparency.byLayer;
+		let color: Color;
+		let transparency: Transparency;
 		let isBookColor: boolean = false;
 
 		const size: number = this.readBitShort();
@@ -55,12 +55,7 @@ export class DwgStreamReaderAC18 extends DwgStreamReaderAC15 {
 				isBookColor = true;
 			} else if ((flags & 0x8000) > 0) {
 				const rgb: number = this.readBitLong() >>> 0;
-				const arr = new Uint8Array(4);
-				arr[0] = rgb & 0xFF;
-				arr[1] = (rgb >>> 8) & 0xFF;
-				arr[2] = (rgb >>> 16) & 0xFF;
-				arr[3] = (rgb >>> 24) & 0xFF;
-				color = Color.fromTrueColor((arr[2] << 16) | (arr[1] << 8) | arr[0]);
+				color = Color.fromTrueColor(rgb & 0xFFFFFF);
 			} else {
 				color = new Color(size & 0b111111111111);
 			}

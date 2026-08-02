@@ -16,7 +16,9 @@ export class DwgFileHeaderWriterAC18 extends DwgFileHeaderWriterBase<DwgFileHead
 
 	override get handleSectionOffset(): number { return 0; }
 
-	protected get compressor(): ICompressor { return new DwgLZ77AC18Compressor(); }
+	private _compressor: ICompressor | null = null;
+
+	protected get compressor(): ICompressor { return this._compressor ??= new DwgLZ77AC18Compressor(); }
 
 	private get _descriptors(): Map<string, DwgSectionDescriptor> { return this.fileHeader.descriptors; }
 
@@ -79,20 +81,17 @@ export class DwgFileHeaderWriterAC18 extends DwgFileHeaderWriterBase<DwgFileHead
 
 	protected applyCompression(buffer: Uint8Array, decompressedSize: number, offset: number, totalSize: number, isCompressed: boolean): Uint8Array {
 		if (isCompressed) {
-			const holder = new Uint8Array(decompressedSize);
-			for (let i = 0; i < totalSize; i++) {
-				holder[i] = buffer[offset + i];
+			if (totalSize === decompressedSize) {
+				// Full chunk: compress in place, no zero-padded copy needed.
+				return this.compressor.compress(buffer, offset, decompressedSize);
 			}
+			const holder = new Uint8Array(decompressedSize);
+			holder.set(buffer.subarray(offset, offset + totalSize));
 			// remaining bytes are already 0
-
-			const result: number[] = [];
-			this.compressor.compress(holder, 0, decompressedSize, result);
-			return new Uint8Array(result);
+			return this.compressor.compress(holder, 0, decompressedSize);
 		} else {
 			const result = new Uint8Array(decompressedSize);
-			for (let i = 0; i < totalSize; i++) {
-				result[i] = buffer[offset + i];
-			}
+			result.set(buffer.subarray(offset, offset + totalSize));
 			// remaining are 0
 			return result;
 		}
@@ -218,9 +217,7 @@ export class DwgFileHeaderWriterAC18 extends DwgFileHeaderWriterBase<DwgFileHead
 	private _compressChecksum(section: DwgLocalSectionMap, stream: Uint8Array): void {
 		section.decompressedSize = stream.length;
 
-		const compressed: number[] = [];
-		this.compressor.compress(stream, 0, stream.length, compressed);
-		const compressedArr = new Uint8Array(compressed);
+		const compressedArr = this.compressor.compress(stream, 0, stream.length);
 
 		section.compressedSize = compressedArr.length;
 

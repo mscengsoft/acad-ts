@@ -1257,6 +1257,52 @@ export const metadataLookupEntities: readonly ClassMetadata[] = [
     "dxfSubClassName": "AcDbLine"
   },
   {
+    "typeName": "LwPolyline",
+    "baseTypeName": "Entity",
+    "properties": [
+      {
+        "propertyName": "constantWidth",
+        "valueCodes": [
+          43
+        ],
+        "referenceType": 8
+      },
+      {
+        "propertyName": "elevation",
+        "valueCodes": [
+          38
+        ],
+        "referenceType": 0
+      },
+      {
+        "propertyName": "flags",
+        "valueCodes": [
+          70
+        ],
+        "referenceType": 0
+      },
+      {
+        "propertyName": "normal",
+        "valueCodes": [
+          210,
+          220,
+          230
+        ],
+        "referenceType": 0
+      },
+      {
+        "propertyName": "thickness",
+        "valueCodes": [
+          39
+        ],
+        "referenceType": 0
+      }
+    ],
+    "systemVariables": [],
+    "dxfName": "LWPOLYLINE",
+    "dxfSubClassName": "AcDbPolyline"
+  },
+  {
     "typeName": "Mesh",
     "baseTypeName": "Entity",
     "properties": [
@@ -2015,6 +2061,104 @@ export const metadataLookupEntities: readonly ClassMetadata[] = [
     "properties": [],
     "systemVariables": [],
     "dxfName": "REGION"
+  },
+  {
+    "typeName": "ModelerGeometry",
+    "baseTypeName": "Entity",
+    "properties": [],
+    "systemVariables": [],
+    "dxfName": "",
+    "dxfSubClassName": "AcDbModelerGeometry"
+  },
+  {
+    "typeName": "Polyline",
+    "baseTypeName": "Entity",
+    "properties": [],
+    "systemVariables": [],
+    "dxfName": "POLYLINE"
+  },
+  {
+    "typeName": "Polyline2D",
+    "baseTypeName": "Polyline",
+    "properties": [
+      {
+        "propertyName": "elevation",
+        "valueCodes": [
+          30
+        ],
+        "referenceType": 8
+      },
+      {
+        "propertyName": "endWidth",
+        "valueCodes": [
+          41
+        ],
+        "referenceType": 8
+      },
+      {
+        "propertyName": "flags",
+        "valueCodes": [
+          70
+        ],
+        "referenceType": 0
+      },
+      {
+        "propertyName": "normal",
+        "valueCodes": [
+          210,
+          220,
+          230
+        ],
+        "referenceType": 8
+      },
+      {
+        "propertyName": "smoothSurface",
+        "valueCodes": [
+          75
+        ],
+        "referenceType": 8
+      },
+      {
+        "propertyName": "startWidth",
+        "valueCodes": [
+          40
+        ],
+        "referenceType": 8
+      },
+      {
+        "propertyName": "thickness",
+        "valueCodes": [
+          39
+        ],
+        "referenceType": 8
+      }
+    ],
+    "systemVariables": [],
+    "dxfName": "POLYLINE",
+    "dxfSubClassName": "AcDb2dPolyline"
+  },
+  {
+    "typeName": "Polyline3D",
+    "baseTypeName": "Polyline",
+    "properties": [
+      {
+        "propertyName": "flags",
+        "valueCodes": [
+          70
+        ],
+        "referenceType": 0
+      },
+      {
+        "propertyName": "smoothSurface",
+        "valueCodes": [
+          75
+        ],
+        "referenceType": 8
+      }
+    ],
+    "systemVariables": [],
+    "dxfName": "POLYLINE",
+    "dxfSubClassName": "AcDb3dPolyline"
   },
   {
     "typeName": "Seqend",

@@ -265,7 +265,7 @@ export class DxfTablesSectionReader extends DxfSectionReaderBase {
     const map = DxfMap.create(template.cadObject.constructor);
 
     while (this._reader.dxfCode !== DxfCode.Start) {
-      if (!readEntry(template, map.subClasses.get(template.cadObject.subclassMarker)!)) {
+      if (!readEntry(template, map.getSubclass(template.cadObject.subclassMarker)!)) {
         const isExtendedData = { value: false };
         this._readCommonTableEntryCodes(template, isExtendedData, map);
         if (isExtendedData.value) {

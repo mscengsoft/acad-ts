@@ -69,7 +69,20 @@ export function getDocumentCodePageName(codePage: string | null | undefined): st
 	return trimmed ? trimmed : DEFAULT_CODE_PAGE_NAME;
 }
 
+const _decoderLabelCache: Map<string | number, string> = new Map();
+
 export function getDecoderEncodingLabel(codePage: string | number | null | undefined): string {
+	const cacheKey = codePage ?? DEFAULT_CODE_PAGE_NAME;
+	const cached = _decoderLabelCache.get(cacheKey);
+	if (cached !== undefined) {
+		return cached;
+	}
+	const label = _computeDecoderEncodingLabel(codePage);
+	_decoderLabelCache.set(cacheKey, label);
+	return label;
+}
+
+function _computeDecoderEncodingLabel(codePage: string | number | null | undefined): string {
 	const explicit = normalizeExplicitEncodingLabel(codePage);
 	if (explicit) {
 		return explicit;
@@ -143,12 +156,14 @@ export function getDecoderEncodingLabel(codePage: string | number | null | undef
 	}
 }
 
+const _utf8Encoder = new TextEncoder();
+
 export function encodeCadString(value: string | null | undefined, codePage: string | number | null | undefined): Uint8Array {
 	const text = value ?? '';
 	const encoding = getDecoderEncodingLabel(codePage);
 
 	if (encoding === 'utf-8') {
-		return new TextEncoder().encode(text);
+		return _utf8Encoder.encode(text);
 	}
 
 	if (encoding === 'utf-16le') {
@@ -186,6 +201,13 @@ function encodeSingleByte(text: string, encoding: string): Uint8Array {
 	const bytes = new Uint8Array(text.length);
 
 	for (let i = 0; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		// All supported single-byte encodings are ASCII-compatible in 0x00-0x7F.
+		if (code < 0x80) {
+			bytes[i] = code;
+			continue;
+		}
+
 		const char = text.charAt(i);
 		const mapped = encoderMap.get(char);
 		if (mapped !== undefined) {

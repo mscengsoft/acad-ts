@@ -46,7 +46,10 @@ export class CadEntityTemplate extends CadTemplateT<Entity> {
 	protected override _build(builder: CadDocumentBuilder): void {
 		super._build(builder);
 
-		const layer = this.getTableReference<Layer>(builder, this.layerHandle, this.layerName ?? '');
+		const layer = ((this.layerHandle == null || this.layerHandle === 0) && this.layerName
+			? builder.tryGetCachedLayer(this.layerName)
+			: null)
+			?? this.getTableReference<Layer>(builder, this.layerHandle, this.layerName ?? '');
 		if (layer) {
 			this.cadObject.layer = layer;
 		}
@@ -63,7 +66,10 @@ export class CadEntityTemplate extends CadTemplateT<Entity> {
 				break;
 		}
 
-		const ltype = this.getTableReference<LineType>(builder, this.lineTypeHandle, this.lineTypeName ?? '');
+		const ltype = ((this.lineTypeHandle == null || this.lineTypeHandle === 0) && this.lineTypeName
+			? builder.tryGetCachedLineType(this.lineTypeName)
+			: null)
+			?? this.getTableReference<LineType>(builder, this.lineTypeHandle, this.lineTypeName ?? '');
 		if (ltype) {
 			this.cadObject.lineType = ltype;
 		}

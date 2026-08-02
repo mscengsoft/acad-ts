@@ -684,12 +684,12 @@ export class CadHeader {
 	dimensionMzf: number = 0;
 
 	public getValue(systemvar: string): unknown {
-		return CadHeader.getHeaderMap().get(systemvar)?.getValue(this);
+		return CadHeader.getCachedHeaderMap().get(systemvar)?.getValue(this);
 	}
 
 	public getValues(systemvar: string): Map<number, unknown> {
 		const values = new Map<number, unknown>();
-		const metadata = CadHeader.getHeaderMap().get(systemvar);
+		const metadata = CadHeader.getCachedHeaderMap().get(systemvar);
 		if (!metadata) {
 			return values;
 		}
@@ -705,6 +705,10 @@ export class CadHeader {
 	}
 
 	static getHeaderMap(): Map<string, CadSystemVariable> {
+		return new Map(CadHeader.getCachedHeaderMap());
+	}
+
+	private static getCachedHeaderMap(): Map<string, CadSystemVariable> {
 		if (!CadHeader._headerMapCache) {
 			CadHeader._headerMapCache = new Map<string, CadSystemVariable>();
 			for (const metadata of getSystemVariableMetadataMap(CadHeader).values()) {
@@ -712,11 +716,11 @@ export class CadHeader {
 			}
 		}
 
-		return new Map(CadHeader._headerMapCache);
+		return CadHeader._headerMapCache;
 	}
 
 	setValue(variable: string | number, parameters: unknown[] | unknown): void {
-		const property = CadHeader.getHeaderMap().get(String(variable));
+		const property = CadHeader.getCachedHeaderMap().get(String(variable));
 		if (!property) {
 			return;
 		}
